@@ -1,0 +1,4 @@
+storePassword=REPLACE_WITH_SECURE_PASSWORD
+keyPassword=REPLACE_WITH_SECURE_PASSWORD
+keyAlias=bdj-studio-license
+storeFile=C:/secure/bdj-studio-license-upload.jks

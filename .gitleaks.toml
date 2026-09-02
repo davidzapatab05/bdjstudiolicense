@@ -1,0 +1,11 @@
+title = "BDJ Studio License Gitleaks configuration"
+
+# These are fixed identifiers used as secure-storage keys by the Flutter
+# issuer console. They are not secret material; their values are generated
+# locally and stored by flutter_secure_storage.
+[allowlist]
+  description = "Allow fixed secure-storage key identifiers"
+  regexTarget = "match"
+  regexes = [
+    '''key:\s*['\"]issuer_(?:private|public)_key['\"]''',
+  ]

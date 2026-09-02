@@ -1,0 +1,250 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== USUARIOS ====================
+
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  name        String?
+  password    String
+  displayName String?
+  role        String   @default("user") // user, admin, super
+  isVerified  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  licenses   License[]
+  devices    Device[]
+  tickets    SupportTicket[]
+
+  @@map("users")
+}
+
+// ==================== ADMIN USERS ====================
+
+model AdminUser {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  password        String
+  name            String
+  role            String   @default("super") // único rol administrativo
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  auditLogs AuditLog[]
+
+  @@map("admin_users")
+}
+
+// Clientes del emisor offline. No son cuentas de autenticación: separarlos de
+// User evita inventar contraseñas para personas que solo reciben una licencia.
+model Customer {
+  id         String   @id @default(uuid())
+  externalId String   @unique
+  email      String
+  name       String
+  deviceId   String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  offlineLicenses OfflineLicense[]
+
+  @@unique([email, deviceId])
+  @@map("customers")
+}
+
+// Registro remoto de una licencia firmada offline. El token nunca se guarda;
+// tokenDigest permite correlación y auditoría sin exponer el código activable.
+model OfflineLicense {
+  id           String   @id @default(uuid())
+  externalId   String   @unique
+  customerId   String
+  customer     Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  product      String
+  deviceId     String
+  plan         String
+  tokenDigest  String   @unique
+  status       String   @default("active")
+  issuedAt     DateTime
+  expiresAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([customerId, product])
+  @@index([deviceId])
+  @@map("offline_licenses")
+}
+
+model OfflineDeviceBlock {
+  id        String   @id @default(uuid())
+  deviceId  String   @unique
+  reason    String
+  blockedAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("offline_device_blocks")
+}
+
+// ==================== PLANES DE LICENCIA ====================
+
+model LicensePlan {
+  id          String   @id @default(uuid())
+  name        String
+  type        String   // lifetime, monthly, annual
+  price       Float
+  maxDevices  Int      @default(1)
+  features    String   @default("[]") // JSON array de features
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  licenses License[]
+
+  @@map("license_plans")
+}
+
+// ==================== LICENCIAS ====================
+
+model License {
+  id           String   @id @default(uuid())
+  licenseKey   String   @unique // SPP-XXXX-XXXX-XXXX
+  status       String   @default("inactive") // active, inactive, revoked, expired
+  type         String   @default("perpetual") // perpetual, monthly, annual
+  maxDevices   Int      @default(3)
+  activatedAt  DateTime?
+  expiresAt    DateTime?
+  offlineDays  Int      @default(30)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  userId    String?
+  user      User?        @relation(fields: [userId], references: [id])
+  planId    String?
+  plan      LicensePlan? @relation(fields: [planId], references: [id])
+  devices   Device[]
+  activations Activation[]
+
+  @@map("licenses")
+}
+
+// ==================== DISPOSITIVOS ====================
+
+model Device {
+  id               String   @id @default(uuid())
+  hardwareFingerprint String @unique
+  deviceId         String   @unique
+  name             String
+  platform         String   // android, ios, windows, macos
+  lastIp           String?
+  isActive         Boolean  @default(true)
+  lastSeen         DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  licenseId  String?
+  license    License? @relation(fields: [licenseId], references: [id])
+
+  isBanned   Boolean  @default(false)
+  bannedAt   DateTime?
+  banReason  String?
+
+  @@map("devices")
+}
+
+// ==================== ACTIVACIONES ====================
+
+model Activation {
+  id          String   @id @default(uuid())
+  licenseId   String
+  license     License  @relation(fields: [licenseId], references: [id])
+  deviceId    String
+  success     Boolean
+  ip          String?
+  userAgent   String?
+  platform    String?
+  createdAt   DateTime @default(now())
+
+  @@map("activations")
+}
+
+// ==================== AUDIT LOG ====================
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  adminId    String
+  admin      AdminUser @relation(fields: [adminId], references: [id])
+  action     String   // create, update, delete, revoke, ban, etc.
+  targetType String   // user, license, device, plan
+  targetId   String?
+  details    String?  // JSON con detalles
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+// ==================== VERSIONES DE APP ====================
+
+model AppVersion {
+  id            String   @id @default(uuid())
+  version       String
+  platform      String   // android, ios, windows, macos
+  downloadUrl   String
+  isRequired    Boolean  @default(false)
+  releaseNotes  String?
+  createdAt     DateTime @default(now())
+
+  @@map("app_versions")
+}
+
+// ==================== BANNED DEVICES ====================
+
+model BannedDevice {
+  id         String   @id @default(uuid())
+  deviceId   String   @unique
+  reason     String
+  bannedBy   String   // admin email o id
+  createdAt  DateTime @default(now())
+
+  @@map("banned_devices")
+}
+
+// ==================== FEATURE FLAGS ====================
+
+model FeatureFlag {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  enabled   Boolean  @default(false)
+  plans     String   @default("[]") // JSON array de plan IDs que tienen acceso
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("feature_flags")
+}
+
+// ==================== SOPORTE ====================
+
+model SupportTicket {
+  id        String   @id @default(uuid())
+  subject   String
+  message   String
+  status    String   @default("open") // open, in_progress, resolved, closed
+  priority  String   @default("normal") // critical, high, normal, low
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@map("support_tickets")
+}

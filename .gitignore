@@ -1,0 +1,45 @@
+# Compiled binaries (distribuir via GitHub Releases o directo, no en el repo)
+distribution/*.exe
+distribution/*.apk
+distribution/*.dmg
+distribution/*.zip
+*.exe
+*.apk
+*.dmg
+*.zip
+*.a
+*.dylib
+*.so
+
+# Flutter & Dart build artifacts
+**/build/
+**/.dart_tool/
+**/.pub-cache/
+**/.pub/
+**/.metadata
+**/coverage/
+
+# Sonar scanner (transitorio)
+**/.scannerwork/
+**/*.sonar_lock
+
+# Node & Backend
+**/node_modules/
+**/dist/
+**/.env
+**/.env.*
+!**/.env.example
+**/.npm
+**/.eslintcache
+**/*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+
+# Agent tooling / skill caches
+.claude/
+.agents/
+.windsurf/
