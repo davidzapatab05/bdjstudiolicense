@@ -20,6 +20,7 @@ dependencies:
   bdj_license_core:
     path: ../../bdj_license_core
   file_picker: ^11.0.3
+  http: ^1.2.2
 
 dev_dependencies:
   flutter_test:

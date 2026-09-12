@@ -22,6 +22,7 @@ void main() {
       customerId: 'customer-1',
       customerName: 'Cliente de prueba',
       expiresAt: expiresAt,
+      issuedBy: 'david.zapata@bdjstudio.com',
     );
 
     final restored = LicenseRecord.fromJson(record.toJson());
@@ -34,6 +35,7 @@ void main() {
     expect(restored.customerId, record.customerId);
     expect(restored.customerName, record.customerName);
     expect(restored.expiresAt, expiresAt);
+    expect(restored.issuedBy, 'david.zapata@bdjstudio.com');
   });
 
   test('blocked devices preserve cloud-ready fields and match safely', () {

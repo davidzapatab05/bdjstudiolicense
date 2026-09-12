@@ -131,4 +131,44 @@ void main() {
       );
     },
   );
+
+  test(
+    'LicenseIssuer emite y valida tokens SPP3 para bdj_studio_audio_analyzer',
+    () async {
+      final issuer = LicenseIssuer();
+      await issuer.load();
+
+      final audioAnalyzerRecord = LicenseRecord(
+        id: 'aa-12345678',
+        product: 'bdj_studio_audio_analyzer',
+        device: 'V1-AUDIO-ANALYZER-0001',
+        plan: 'permanent',
+        issuedAt: DateTime.now().toUtc(),
+        customerId: 'customer-analyzer',
+        customerName: 'Audio Lab Test',
+        status: 'active',
+        expiresAt: null,
+        exactVersion: '1.0.0',
+      );
+
+      final token = await issuer.generateSpp3TokenForRecord(audioAnalyzerRecord);
+      expect(token, startsWith('SPP3.'));
+
+      final hwidHash = KeyHierarchy.hashHwid('V1-AUDIO-ANALYZER-0001');
+      final verification = await Spp3Token.verify(
+        token: token,
+        rootPublicKeyBase64: KeyHierarchy.ecosystemRootPublicKey,
+        expectedProductCode: 'bdj_studio_audio_analyzer',
+        currentHwidHash: hwidHash,
+        expectedVersion: '1.0.0',
+      );
+
+      expect(verification.status, equals(Spp3VerificationStatus.valid));
+      expect(
+        verification.payload?.productCode,
+        equals('bdj_studio_audio_analyzer'),
+      );
+      expect(verification.payload?.exactVersion, equals('1.0.0'));
+    },
+  );
 }

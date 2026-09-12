@@ -14,6 +14,7 @@ import 'package:bdj_license_core/bdj_license_core.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'core/filesystem/app_storage_service.dart';
 import 'core/security/keychain_ci_smoke.dart';
+import 'core/supabase/supabase_service.dart';
 
 part 'dashboard.dart';
 
@@ -148,7 +149,7 @@ class LicenseHome extends StatefulWidget {
   State<LicenseHome> createState() => _LicenseHomeState();
 }
 
-class _LicenseHomeState extends State<LicenseHome> {
+class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
   final email = TextEditingController();
   final password = TextEditingController();
   final deviceId = TextEditingController();
@@ -170,9 +171,39 @@ class _LicenseHomeState extends State<LicenseHome> {
   String? error;
   bool isProcessing = false;
   String processingMessage = '';
+  Timer? _liveSyncTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _startLiveAutoSync();
+  }
+
+  void _startLiveAutoSync() {
+    _liveSyncTimer?.cancel();
+    _liveSyncTimer = Timer.periodic(const Duration(seconds: 35), (_) async {
+      if (!mounted || !widget.issuer.unlocked || widget.issuer.isSyncing) return;
+      await widget.issuer.syncWithCloud();
+      if (mounted) {
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && widget.issuer.unlocked && !widget.issuer.isSyncing) {
+      widget.issuer.syncWithCloud().then((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _liveSyncTimer?.cancel();
     email.dispose();
     password.dispose();
     deviceId.dispose();
@@ -594,6 +625,7 @@ class LicenseIssuer {
   static const _testAdminsMigrationKey = 'issuer_test_admins_v2';
   static const _blockedDevicesKey = 'issuer_blocked_devices_v1';
   static const _syncQueueKey = 'issuer_sync_queue_v1';
+  static const _currentSessionEmailKey = 'issuer_session_email_v1';
   static const _maxAttempts = 5;
   static const _pbkdf2Iterations = 210000;
   static const _bootstrapFileName = 'issuer.private.json';
@@ -611,6 +643,8 @@ class LicenseIssuer {
   final List<CustomerRecord> customers = [];
   final List<AdminAccount> admins = [];
   final List<BlockedDeviceRecord> blockedDevices = [];
+  final supabase = SupabaseService();
+  bool isSyncing = false;
   bool _flushingSyncQueue = false;
   bool get isConfigured => privateKey.isNotEmpty && publicKey.isNotEmpty;
 
@@ -707,6 +741,120 @@ class LicenseIssuer {
       } on TypeError {
         // Ignore rows written with an incompatible legacy schema.
       }
+    }
+
+    final savedSession = prefs!.getString(_currentSessionEmailKey);
+    if (savedSession != null && savedSession.isNotEmpty) {
+      for (final a in admins) {
+        if (a.email.toLowerCase() == savedSession.toLowerCase() && a.isActive) {
+          unlocked = true;
+          currentUser = a.email;
+          currentRole = a.role;
+          break;
+        }
+      }
+    }
+    unawaited(syncWithCloud().then((_) {
+      if (!unlocked && savedSession != null && savedSession.isNotEmpty) {
+        for (final a in admins) {
+          if (a.email.toLowerCase() == savedSession.toLowerCase() && a.isActive) {
+            unlocked = true;
+            currentUser = a.email;
+            currentRole = a.role;
+            break;
+          }
+        }
+      }
+    }));
+  }
+
+  Future<void> syncWithCloud() async {
+    if (isSyncing) return;
+    isSyncing = true;
+    try {
+      final results = await Future.wait([
+        supabase.fetchCustomers(),
+        supabase.fetchLicenses(),
+        supabase.fetchBlockedDevices(),
+        supabase.fetchAdmins(),
+      ]);
+      final cloudCustomers = results[0] as List<CustomerRecord>;
+      final cloudLicenses = results[1] as List<LicenseRecord>;
+      final cloudBlocks = results[2] as List<BlockedDeviceRecord>;
+      final cloudAdmins = results[3] as List<AdminAccount>;
+
+      if (cloudCustomers.isEmpty && customers.isNotEmpty) {
+        await supabase.syncCustomersBulk(customers);
+      }
+      if (cloudLicenses.isEmpty && records.isNotEmpty) {
+        await supabase.syncLicensesBulk(records);
+      }
+      if (cloudBlocks.isEmpty && blockedDevices.isNotEmpty) {
+        await supabase.syncBlockedDevicesBulk(blockedDevices);
+      }
+      if (cloudAdmins.isEmpty && admins.isNotEmpty) {
+        await supabase.syncAdminsBulk(admins);
+      }
+
+      if (cloudCustomers.isNotEmpty) {
+        final cloudIds = cloudCustomers.map((c) => c.id).toSet();
+        final localOnly = customers.where((c) => !cloudIds.contains(c.id)).toList();
+        if (localOnly.isNotEmpty) {
+          await supabase.syncCustomersBulk(localOnly);
+        }
+        customers
+          ..clear()
+          ..addAll(cloudCustomers)
+          ..addAll(localOnly);
+        await prefs?.setStringList(
+          _customersKey,
+          customers.map((item) => jsonEncode(item.toJson())).toList(),
+        );
+      }
+
+      if (cloudLicenses.isNotEmpty) {
+        final cloudIds = cloudLicenses.map((l) => l.id).toSet();
+        final localOnly = records.where((r) => !cloudIds.contains(r.id)).toList();
+        if (localOnly.isNotEmpty) {
+          await supabase.syncLicensesBulk(localOnly);
+        }
+        records
+          ..clear()
+          ..addAll(cloudLicenses)
+          ..addAll(localOnly);
+        await _saveLicenseRecords();
+      }
+
+      if (cloudBlocks.isNotEmpty) {
+        final cloudDeviceIds = cloudBlocks.map((b) => b.device.toLowerCase()).toSet();
+        final localOnly = blockedDevices.where((b) => !cloudDeviceIds.contains(b.device.toLowerCase())).toList();
+        if (localOnly.isNotEmpty) {
+          await supabase.syncBlockedDevicesBulk(localOnly);
+        }
+        blockedDevices
+          ..clear()
+          ..addAll(cloudBlocks)
+          ..addAll(localOnly);
+        await _saveBlockedDevices();
+      }
+
+      if (cloudAdmins.isNotEmpty) {
+        for (final ca in cloudAdmins) {
+          final idx = admins.indexWhere((a) => a.email.toLowerCase() == ca.email.toLowerCase());
+          if (idx >= 0) {
+            admins[idx] = ca;
+          } else {
+            admins.add(ca);
+          }
+        }
+        await _saveAdmins();
+      } else if (admins.isNotEmpty) {
+        await supabase.syncAdminsBulk(admins);
+      }
+    } catch (e) {
+      debugPrint('Error en syncWithCloud: $e');
+    } finally {
+      isSyncing = false;
     }
   }
 
@@ -968,13 +1116,20 @@ class LicenseIssuer {
 
     // La consola emisora es estrictamente offline: no depende de servidor,
     // conectividad, ni tokens remotos para autenticar al operador.
-    final isValid = await _verifyOfflinePassword(normalizedEmail, password);
+    var isValid = await _verifyOfflinePassword(normalizedEmail, password);
+    if (!isValid) {
+      try {
+        await syncWithCloud();
+        isValid = await _verifyOfflinePassword(normalizedEmail, password);
+      } catch (_) {}
+    }
     if (isValid) {
       unlocked = true;
       await _resetFailures();
       currentUser = normalizedEmail;
       currentRole = 'super';
       await _ensureCurrentUserInAdmins(cleanPassword);
+      await prefs!.setString(_currentSessionEmailKey, normalizedEmail);
       return true;
     }
 
@@ -1056,31 +1211,47 @@ class LicenseIssuer {
         },
       );
       await refreshAdmins();
-    } catch (_) {
-      if (!admins.any((a) => a.email.toLowerCase() == normalized)) {
-        admins.add(
-          AdminAccount(
-            id: 'local_${DateTime.now().millisecondsSinceEpoch}',
-            email: normalized,
-            passwordHash: hashStr,
-            passwordSalt: saltStr,
-            role: 'super',
-            isActive: true,
-          ),
-        );
-      }
+    } catch (_) {}
+    final account = AdminAccount(
+      id: 'admin_${DateTime.now().millisecondsSinceEpoch}',
+      email: normalized,
+      passwordHash: hashStr,
+      passwordSalt: saltStr,
+      role: 'super',
+      isActive: true,
+    );
+    final existingIdx = admins.indexWhere((a) => a.email.toLowerCase() == normalized);
+    if (existingIdx >= 0) {
+      admins[existingIdx] = account;
+    } else {
+      admins.add(account);
     }
     await _saveAdmins();
+    await supabase.syncAdmin(account);
   }
 
   Future<void> deleteAdmin(String id) async {
-    try {
-      await _apiRequest('DELETE', '/admin/admins/$id');
-      await refreshAdmins();
-    } catch (_) {
-      admins.removeWhere((a) => a.id == id || a.email == id);
+    final normalized = id.trim().toLowerCase();
+    if (normalized == 'david.zapata@bdjstudio.com' ||
+        admins.any((a) =>
+            (a.id?.toLowerCase() == normalized ||
+                a.email.toLowerCase() == normalized) &&
+            a.email.toLowerCase() == 'david.zapata@bdjstudio.com')) {
+      throw StateError(
+        'La cuenta de david.zapata@bdjstudio.com es el creador y Super Admin principal. No puede ser eliminada.',
+      );
     }
+    final target = admins.cast<AdminAccount?>().firstWhere(
+      (a) => a?.id == id || a?.email.toLowerCase() == normalized,
+      orElse: () => null,
+    );
+    admins.removeWhere((a) => a.id == id || a.email.toLowerCase() == normalized);
     await _saveAdmins();
+    if (target != null) {
+      await supabase.deleteAdmin(target.email);
+    } else {
+      await supabase.deleteAdmin(normalized);
+    }
   }
 
   Future<void> updateAdmin(
@@ -1089,24 +1260,30 @@ class LicenseIssuer {
     String? password,
   }) async {
     final normalized = email.trim().toLowerCase();
-    final body = <String, dynamic>{'email': normalized};
-    if (password != null && password.isNotEmpty) body['password'] = password;
-    try {
-      await _apiRequest('PATCH', '/admin/admins/$id', body: body);
-      await refreshAdmins();
-    } catch (_) {
-      final index = admins.indexWhere((admin) => admin.id == id);
-      if (index < 0) rethrow;
+    final index = admins.indexWhere(
+      (admin) => admin.id == id || admin.email.toLowerCase() == id.toLowerCase(),
+    );
+    if (index >= 0) {
       final previous = admins[index];
-      admins[index] = AdminAccount(
-        id: previous.id,
+      String hash = previous.passwordHash;
+      String salt = previous.passwordSalt ?? '';
+      if (password != null && password.isNotEmpty) {
+        final saltBytes = List<int>.generate(16, (_) => Random.secure().nextInt(256));
+        final derived = await _derivePin(password, saltBytes);
+        salt = base64UrlEncode(saltBytes);
+        hash = base64UrlEncode(derived);
+      }
+      final updated = AdminAccount(
+        id: previous.id ?? 'admin_${DateTime.now().millisecondsSinceEpoch}',
         email: normalized,
-        passwordHash: previous.passwordHash,
-        passwordSalt: previous.passwordSalt,
+        passwordHash: hash,
+        passwordSalt: salt,
         role: previous.role,
         isActive: previous.isActive,
       );
+      admins[index] = updated;
       await _saveAdmins();
+      await supabase.syncAdmin(updated);
     }
   }
 
@@ -1172,6 +1349,10 @@ class LicenseIssuer {
       );
     }
     await _saveAdmins();
+    final updatedAdmin = admins.firstWhere((a) => a.email.toLowerCase() == normalized);
+    try {
+      await supabase.syncAdmin(updatedAdmin);
+    } catch (_) {}
     return true;
   }
 
@@ -1270,6 +1451,7 @@ class LicenseIssuer {
     unlocked = false;
     currentUser = null;
     currentRole = null;
+    prefs?.remove(_currentSessionEmailKey);
   }
 
   Future<CustomerRecord> getOrCreateCustomer(
@@ -1317,6 +1499,9 @@ class LicenseIssuer {
           _customersKey,
           customers.map((item) => jsonEncode(item.toJson())).toList(),
         );
+        try {
+          await supabase.syncCustomer(migrated);
+        } catch (_) {}
         await _enqueueSync('/issuer/customers/sync', {
           'externalId': migrated.id,
           'name': migrated.name,
@@ -1349,6 +1534,9 @@ class LicenseIssuer {
       _customersKey,
       customers.map((item) => jsonEncode(item.toJson())).toList(),
     );
+    try {
+      await supabase.syncCustomer(newCustomer);
+    } catch (_) {}
     await _enqueueSync('/issuer/customers/sync', {
       'externalId': newCustomer.id,
       'name': newCustomer.name,
@@ -1381,6 +1569,9 @@ class LicenseIssuer {
       _customersKey,
       customers.map((item) => jsonEncode(item.toJson())).toList(),
     );
+    try {
+      await supabase.deleteCustomer(customerId);
+    } catch (_) {}
 
     // En backend se borran en cascada las licencias vinculadas en una sola petición.
     await _enqueueSync(
@@ -1437,6 +1628,9 @@ class LicenseIssuer {
     if (recordsChanged) {
       await _saveLicenseRecords();
     }
+    try {
+      await supabase.syncCustomer(customers[index]);
+    } catch (_) {}
     await _enqueueSync('/issuer/customers/sync', {
       'externalId': current.id,
       'name': newName,
@@ -1470,6 +1664,11 @@ class LicenseIssuer {
       (record) => removed.any((item) => item.id == record.id),
     );
     await _saveLicenseRecords();
+    for (final rem in removed) {
+      try {
+        await supabase.deleteLicense(rem.id);
+      } catch (_) {}
+    }
     for (var index = 0; index < removed.length; index++) {
       await _enqueueSync(
         '/issuer/licenses/${Uri.encodeComponent(removed[index].id)}',
@@ -1510,6 +1709,9 @@ class LicenseIssuer {
       ),
     );
     await _saveBlockedDevices();
+    try {
+      await supabase.syncBlockedDevice(blockedDevices.last);
+    } catch (_) {}
     await _enqueueSync('/issuer/device-blocks/sync', {
       'deviceId': normalizedDevice,
       'reason': reason.trim().isEmpty
@@ -1527,6 +1729,9 @@ class LicenseIssuer {
       (item) => item.device.toLowerCase() == device.trim().toLowerCase(),
     );
     await _saveBlockedDevices();
+    try {
+      await supabase.deleteBlockedDevice(device.trim());
+    } catch (_) {}
     await _enqueueSync(
       '/issuer/device-blocks/${Uri.encodeComponent(device.trim())}',
       const {},
@@ -1680,6 +1885,7 @@ class LicenseIssuer {
       'bdj_studio_wave_video': 4,
       'bdj_studio_voice_spot': 5,
       'bdj_studio_search_pro': 6,
+      'bdj_studio_audio_analyzer': 7,
     };
     final productCode = productCodes[product];
     if (productCode == null) {
@@ -1752,6 +1958,7 @@ class LicenseIssuer {
       customerName: customer.name,
       status: 'active',
       expiresAt: expiresAt,
+      issuedBy: currentUser ?? 'desconocido',
       exactVersion: switch (product) {
         'bdj_studio_sample_pad' => '1.0.3',
         'bdj_studio_synth_pro' => '1.0.0',
@@ -1759,6 +1966,7 @@ class LicenseIssuer {
         'bdj_studio_stems_music' => '1.0.0',
         'bdj_studio_voice_spot' => '1.0.0',
         'bdj_studio_search_pro' => '1.0.0',
+        'bdj_studio_audio_analyzer' => '1.0.0',
         _ => '1.0.0',
       },
     );
@@ -1773,6 +1981,9 @@ class LicenseIssuer {
     );
     records.add(newRecord);
     await _saveLicenseRecords();
+    try {
+      await supabase.syncLicense(newRecord);
+    } catch (_) {}
     await _enqueueSync('/issuer/licenses/sync', {
       'externalId': newRecord.id,
       'customerExternalId': customer.id,
@@ -1960,6 +2171,7 @@ class LicenseIssuer {
               expiresAt: DateTime.tryParse(
                 item['expiresAt']?.toString() ?? '',
               )?.toUtc(),
+              issuedBy: item['issuedBy'] as String?,
             ),
           );
           recordsChanged = true;
@@ -2180,6 +2392,7 @@ class LicenseRecord {
     this.expiresAt,
     this.exactVersion,
     this.hwidSchemaVersion = 'V2',
+    this.issuedBy,
   });
 
   final String id;
@@ -2196,6 +2409,7 @@ class LicenseRecord {
   final DateTime? expiresAt;
   final String? exactVersion;
   final String hwidSchemaVersion;
+  final String? issuedBy;
 
   bool get isLegacyTestLicense => hwidSchemaVersion != 'V2';
 
@@ -2210,6 +2424,7 @@ class LicenseRecord {
     'bdj_studio_wave_video' => 'BDJ Studio Wave Video',
     'bdj_studio_voice_spot' => 'BDJ Studio Voice Spot',
     'bdj_studio_search_pro' => 'BDJ Studio Search Pro',
+    'bdj_studio_audio_analyzer' => 'BDJ Studio Audio Analyzer',
     _ => product,
   };
 
@@ -2220,6 +2435,7 @@ class LicenseRecord {
     'bdj_studio_stems_music' => '1.0.0',
     'bdj_studio_voice_spot' => '1.0.0',
     'bdj_studio_search_pro' => '1.0.0',
+    'bdj_studio_audio_analyzer' => '1.0.0',
     _ => '1.0.0',
   };
 
@@ -2252,6 +2468,7 @@ class LicenseRecord {
         : DateTime.parse(json['expiresAt'] as String),
     exactVersion: json['exactVersion'] as String?,
     hwidSchemaVersion: json['hwidSchemaVersion'] as String? ?? 'V1',
+    issuedBy: json['issuedBy'] as String?,
   );
 
   Map<String, dynamic> toJson() => {
@@ -2269,6 +2486,7 @@ class LicenseRecord {
     'expiresAt': expiresAt?.toIso8601String(),
     'exactVersion': exactVersion ?? appVersion,
     'hwidSchemaVersion': hwidSchemaVersion,
+    'issuedBy': issuedBy,
   };
 
   LicenseRecord copyWith({
@@ -2278,6 +2496,7 @@ class LicenseRecord {
     String? token,
     String? exactVersion,
     String? hwidSchemaVersion,
+    String? issuedBy,
   }) => LicenseRecord(
     id: id,
     product: product,
@@ -2293,6 +2512,7 @@ class LicenseRecord {
     expiresAt: expiresAt,
     exactVersion: exactVersion ?? this.exactVersion,
     hwidSchemaVersion: hwidSchemaVersion ?? this.hwidSchemaVersion,
+    issuedBy: issuedBy ?? this.issuedBy,
   );
 }
 

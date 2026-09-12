@@ -17,6 +17,7 @@ const products = [
   'bdj_studio_wave_video',
   'bdj_studio_voice_spot',
   'bdj_studio_search_pro',
+  'bdj_studio_audio_analyzer',
 ] as const;
 const statuses = ['active', 'superseded', 'revoked'] as const;
 

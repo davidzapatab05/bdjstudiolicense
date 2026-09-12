@@ -7,7 +7,19 @@ const _productLabels = <String, String>{
   'bdj_studio_wave_video': 'BDJ Studio Wave Video',
   'bdj_studio_voice_spot': 'BDJ Studio Voice Spot',
   'bdj_studio_search_pro': 'BDJ Studio Search Pro',
+  'bdj_studio_audio_analyzer': 'BDJ Studio Audio Analyzer',
 };
+
+String _formatCreator(String? creator) {
+  if (creator == null || creator.trim().isEmpty || creator.trim().toLowerCase() == 'super admin') {
+    return 'david.zapata';
+  }
+  final clean = creator.trim();
+  if (clean.contains('@')) {
+    return clean.split('@').first;
+  }
+  return clean;
+}
 
 extension _LicenseDashboardView on _LicenseHomeState {
   Widget buildDashboardShell(BuildContext context) {
@@ -104,7 +116,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
         for (final item in const [
           (CupertinoIcons.square_grid_2x2_fill, 'Dashboard'),
           (CupertinoIcons.person_2_square_stack_fill, 'Gesti\u00f3n'),
-          (CupertinoIcons.person_crop_circle_badge_checkmark, 'Super Admins'),
+          (CupertinoIcons.person_crop_circle_badge_checkmark, 'Administradores'),
         ].indexed)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
@@ -123,13 +135,21 @@ extension _LicenseDashboardView on _LicenseHomeState {
             ),
           ),
         const Spacer(),
-        const ListTile(
-          leading: CircleAvatar(
+        ListTile(
+          leading: const CircleAvatar(
             backgroundColor: Color(0x335E5CE6),
             child: Icon(CupertinoIcons.person_fill, size: 18),
           ),
-          title: Text('Super Admin'),
-          subtitle: Text('Acceso total'),
+          title: Text(
+            (widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com'
+                ? 'Super Admin'
+                : 'Administrador',
+          ),
+          subtitle: Text(
+            (widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com'
+                ? 'Acceso total'
+                : 'Acceso al panel',
+          ),
         ),
       ],
     ),
@@ -295,7 +315,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
               const Color(0xFF00E5FF),
             ),
             _dashboardMetric(
-              'Super Admins',
+              'Administradores',
               '${widget.issuer.admins.where((admin) => admin.isActive).isNotEmpty ? widget.issuer.admins.where((admin) => admin.isActive).length : (widget.issuer.currentUser != null ? 1 : 0)}',
               CupertinoIcons.shield_fill,
               const Color(0xFF30D158),
@@ -316,6 +336,219 @@ extension _LicenseDashboardView on _LicenseHomeState {
           );
         },
       ),
+      const SizedBox(height: 18),
+      _dashboardPanel(
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final narrow = constraints.maxWidth < 600;
+            final textCol = const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(CupertinoIcons.archivebox_fill, color: Color(0xFF00E5FF), size: 18),
+                    SizedBox(width: 8),
+                    Text(
+                      'Copia de Seguridad de la Base de Datos',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Descarga una copia completa de clientes, licencias y bloqueos en formato .json.',
+                  style: TextStyle(color: Colors.white60, fontSize: 13),
+                ),
+              ],
+            );
+            final exportBtn = FilledButton.icon(
+              onPressed: _exportFullBackupJson,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF1E2A38),
+                foregroundColor: const Color(0xFF00E5FF),
+                side: const BorderSide(color: Color(0xFF00E5FF), width: 1.2),
+              ),
+              icon: const Icon(CupertinoIcons.arrow_down_doc_fill, size: 16),
+              label: const Text('Exportar Respaldo (.json)'),
+            );
+            if (narrow) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  textCol,
+                  const SizedBox(height: 12),
+                  exportBtn,
+                ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: textCol),
+                const SizedBox(width: 16),
+                exportBtn,
+              ],
+            );
+          },
+        ),
+      ),
+      const SizedBox(height: 18),
+      _dashboardPanel(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Icon(
+                  CupertinoIcons.clock_fill,
+                  color: Color(0xFF00E5FF),
+                  size: 20,
+                ),
+                SizedBox(width: 10),
+                Text(
+                  'Actividad de licencias emitidas',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Historial de licencias emitidas y el usuario que las generó.',
+              style: TextStyle(color: Colors.white60, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            if (widget.issuer.records.isEmpty)
+              const _DashboardEmpty(
+                icon: CupertinoIcons.ticket,
+                message: 'Aún no se han generado licencias.',
+              )
+            else
+              ...widget.issuer.records.reversed.take(10).map((lic) {
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF141822),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF1E2530)),
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final wide = constraints.maxWidth >= 640;
+                      final details = Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x3364D2FF),
+                                  borderRadius: BorderRadius.circular(5),
+                                  border: Border.all(
+                                    color: const Color(0x6664D2FF),
+                                  ),
+                                ),
+                                child: Text(
+                                  lic.productLabel,
+                                  style: const TextStyle(
+                                    color: Color(0xFF00E5FF),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  lic.customerName ?? lic.device,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text(
+                                'ID: ${_shortDeviceId(lic.device)} · ${lic.planLabel} · Emitida: ${_dashboardDate(lic.issuedAt)}',
+                                style: const TextStyle(
+                                  color: Colors.white54,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              _buildLicenseExpirationBadge(lic),
+                            ],
+                          ),
+                        ],
+                      );
+                      final adminBadge = Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0x287C4DFF),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: const Color(0x667C4DFF)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              CupertinoIcons.person_badge_plus_fill,
+                              size: 13,
+                              color: Color(0xFFC4B5FD),
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              'Creada por: ${_formatCreator(lic.issuedBy)}',
+                              style: const TextStyle(
+                                color: Color(0xFFC4B5FD),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (wide) {
+                        return Row(
+                          children: [
+                            Expanded(child: details),
+                            const SizedBox(width: 12),
+                            adminBadge,
+                          ],
+                        );
+                      }
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          details,
+                          const SizedBox(height: 8),
+                          adminBadge,
+                        ],
+                      );
+                    },
+                  ),
+                );
+              }),
+          ],
+        ),
+      ),
     ],
   );
 
@@ -324,9 +557,24 @@ extension _LicenseDashboardView on _LicenseHomeState {
     final query = customerSearch.text.trim().toLowerCase();
     final filtered = widget.issuer.customers.reversed.where((customer) {
       if (query.isEmpty) return true;
-      return customer.name.toLowerCase().contains(query) ||
+      if (customer.name.toLowerCase().contains(query) ||
           customer.email.toLowerCase().contains(query) ||
-          customer.device.toLowerCase().contains(query);
+          customer.device.toLowerCase().contains(query)) {
+        return true;
+      }
+      final custLicenses = _allActiveLicensesForClient(customer);
+      for (final lic in custLicenses) {
+        if (lic.product.toLowerCase().contains(query) ||
+            lic.productLabel.toLowerCase().contains(query) ||
+            lic.planLabel.toLowerCase().contains(query) ||
+            lic.plan.toLowerCase().contains(query) ||
+            (lic.token != null && lic.token!.toLowerCase().contains(query)) ||
+            (lic.exactVersion != null && lic.exactVersion!.toLowerCase().contains(query)) ||
+            (lic.issuedBy != null && lic.issuedBy!.toLowerCase().contains(query))) {
+          return true;
+        }
+      }
+      return false;
     }).toList();
     final pageCount = max(1, (filtered.length + pageSize - 1) ~/ pageSize);
     final safePage = customerPage.clamp(0, pageCount - 1);
@@ -340,7 +588,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
         _dashboardPanel(
           LayoutBuilder(
             builder: (context, constraints) {
-              final narrow = constraints.maxWidth < 480;
+              final narrow = constraints.maxWidth < 620;
               final header = const Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -355,21 +603,33 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   ),
                 ],
               );
-              final button = FilledButton.icon(
-                onPressed: () => _showCustomerLicenseModal(),
-                icon: const Icon(CupertinoIcons.add),
-                label: const Text('Nueva licencia'),
+              final actionButtons = Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _exportFullBackupJson,
+                    icon: const Icon(CupertinoIcons.arrow_down_doc, size: 16),
+                    label: const Text('Exportar Respaldo'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: () => _showCustomerLicenseModal(),
+                    icon: const Icon(CupertinoIcons.add),
+                    label: const Text('Nueva licencia'),
+                  ),
+                ],
               );
               if (narrow) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [header, const SizedBox(height: 12), button],
+                  children: [header, const SizedBox(height: 12), actionButtons],
                 );
               }
               return Row(
                 children: [
                   Expanded(child: header),
-                  button,
+                  actionButtons,
                 ],
               );
             },
@@ -396,12 +656,12 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   SizedBox(
                     width: MediaQuery.sizeOf(context).width < 560
                         ? double.infinity
-                        : 320,
+                        : 360,
                     child: TextField(
                       controller: customerSearch,
                       onChanged: (_) => updateDashboard(() => customerPage = 0),
                       decoration: const InputDecoration(
-                        hintText: 'Buscar cliente, correo o dispositivo',
+                        hintText: 'Buscar por cliente, correo, ID, producto o clave...',
                         prefixIcon: Icon(CupertinoIcons.search),
                       ),
                     ),
@@ -998,7 +1258,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      '${license.productLabel} · Versión ${license.appVersion} · ${license.planLabel}',
+                      '${license.productLabel} · Versión ${license.appVersion} · ${license.planLabel} · Creada por: ${_formatCreator(license.issuedBy)}',
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12),
                     ),
@@ -1364,18 +1624,52 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                 ),
                               ),
                               Text(
-                                '${lic.planLabel} (${lic.expiresAt == null ? "Permanente" : "Vence: ${_dashboardDate(lic.expiresAt!)}"})',
+                                lic.planLabel,
                                 style: const TextStyle(
                                   color: Colors.white70,
                                   fontSize: 13,
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
+                              _buildLicenseExpirationBadge(lic),
                               Text(
                                 'Version ${lic.appVersion}',
                                 style: const TextStyle(
                                   color: Colors.amberAccent,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x287C4DFF),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: const Color(0x667C4DFF),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      CupertinoIcons.person_badge_plus_fill,
+                                      size: 13,
+                                      color: Color(0xFFC4B5FD),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      'Creada por: ${_formatCreator(lic.issuedBy)}',
+                                      style: const TextStyle(
+                                        color: Color(0xFFC4B5FD),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               InkWell(
@@ -1582,6 +1876,10 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     DropdownMenuItem(
                       value: 'bdj_studio_search_pro',
                       child: Text('BDJ Studio Search Pro'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'bdj_studio_audio_analyzer',
+                      child: Text('BDJ Studio Audio Analyzer'),
                     ),
                   ],
                   onChanged: (value) =>
@@ -2026,10 +2324,190 @@ extension _LicenseDashboardView on _LicenseHomeState {
     }
   }
 
+  Future<void> _exportFullBackupJson() async {
+    try {
+      final now = DateTime.now();
+      final dateSlug = '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}_${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+      final defaultFileName = 'BDJ_Studio_Respaldo_$dateSlug.json';
+
+      final backupData = {
+        'version': '1.0.3',
+        'export_date': now.toUtc().toIso8601String(),
+        'exported_by': widget.issuer.currentUser ?? 'admin',
+        'stats': {
+          'customers_count': widget.issuer.customers.length,
+          'licenses_count': widget.issuer.records.length,
+          'blocked_devices_count': widget.issuer.blockedDevices.length,
+          'admins_count': widget.issuer.admins.length,
+        },
+        'customers': widget.issuer.customers.map((c) => c.toJson()).toList(),
+        'licenses': widget.issuer.records.map((l) => l.toJson()).toList(),
+        'blocked_devices': widget.issuer.blockedDevices.map((b) => b.toJson()).toList(),
+      };
+
+      final jsonContent = const JsonEncoder.withIndent('  ').convert(backupData);
+      final payload = utf8.encode(jsonContent);
+
+      final outputPath = await FilePicker.saveFile(
+        dialogTitle: 'Exportar respaldo completo de la base de datos (.json)',
+        fileName: defaultFileName,
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        bytes: payload,
+      );
+
+      if (outputPath == null || outputPath.isEmpty) return;
+
+      if (!kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux)) {
+        final filePath = outputPath.endsWith('.json') ? outputPath : '$outputPath.json';
+        final file = File(filePath);
+        await file.writeAsBytes(payload, flush: true);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: const Color(0xFF00E5FF),
+            content: Text(
+              '¡Respaldo de seguridad exportado exitosamente! ✓ ($defaultFileName)',
+              style: const TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: Colors.redAccent,
+            content: Text('Error al exportar respaldo: $e'),
+          ),
+        );
+      }
+    }
+  }
+
+  Widget _buildLicenseExpirationBadge(LicenseRecord lic) {
+    if (lic.expiresAt == null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0x2830D158),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0x6630D158)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(CupertinoIcons.infinite, size: 12, color: Color(0xFF30D158)),
+            SizedBox(width: 4),
+            Text(
+              'Permanente',
+              style: TextStyle(
+                color: Color(0xFF30D158),
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final now = DateTime.now();
+    final isExpired = lic.expiresAt!.isBefore(now);
+    final diff = lic.expiresAt!.difference(now);
+    final daysLeft = diff.inDays;
+
+    if (isExpired) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0x28FF453A),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0x66FF453A)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(CupertinoIcons.exclamationmark_circle_fill, size: 12, color: Color(0xFFFF453A)),
+            const SizedBox(width: 4),
+            Text(
+              'Expirada (${_dashboardDate(lic.expiresAt!)})',
+              style: const TextStyle(
+                color: Color(0xFFFF453A),
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (daysLeft <= 7) {
+      final label = daysLeft <= 0 ? 'Vence hoy' : 'Vence en $daysLeft d';
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: const Color(0x28FF9F0A),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0x66FF9F0A)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(CupertinoIcons.clock_fill, size: 12, color: Color(0xFFFF9F0A)),
+            const SizedBox(width: 4),
+            Text(
+              '$label (${_dashboardDate(lic.expiresAt!)})',
+              style: const TextStyle(
+                color: Color(0xFFFF9F0A),
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0x2800E5FF),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0x6600E5FF)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(CupertinoIcons.calendar, size: 12, color: Color(0xFF00E5FF)),
+          const SizedBox(width: 4),
+          Text(
+            'Vence en $daysLeft d (${_dashboardDate(lic.expiresAt!)})',
+            style: const TextStyle(
+              color: Color(0xFF00E5FF),
+              fontWeight: FontWeight.w600,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _usersPage() => _dashboardPage(
-    title: 'Super Admins',
+    title: 'Administradores',
     subtitle:
-        'Usuarios internos con acceso total. No existen roles de administrador ni soporte.',
+        'Usuarios internos con acceso al panel de emisión de licencias.',
     children: [
       _dashboardPanel(
         Column(
@@ -2045,7 +2523,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                 ),
                 SizedBox(width: 10),
                 Text(
-                  'Crear Super Admin',
+                  'Crear Administrador',
                   style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
                 ),
               ],
@@ -2099,8 +2577,8 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       ),
                     ),
                     const Chip(
-                      avatar: Icon(CupertinoIcons.shield_fill, size: 17),
-                      label: Text('Super Admin'),
+                      avatar: Icon(CupertinoIcons.person_badge_plus, size: 17),
+                      label: Text('Administrador'),
                     ),
                     SizedBox(
                       height: 50,
@@ -2108,7 +2586,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       child: FilledButton.icon(
                         onPressed: addAdmin,
                         icon: const Icon(CupertinoIcons.add),
-                        label: const Text('Crear usuario'),
+                        label: const Text('Crear administrador'),
                       ),
                     ),
                   ],
@@ -2144,17 +2622,35 @@ extension _LicenseDashboardView on _LicenseHomeState {
               }
               return activeList;
             })().map((admin) {
-              final isOwner = admin.email == widget.issuer.currentUser;
-              final leading = const CircleAvatar(
-                child: Icon(CupertinoIcons.person_fill),
+              final isCurrent = admin.email.toLowerCase() == (widget.issuer.currentUser ?? '').toLowerCase();
+              final isMasterAdmin = admin.email.toLowerCase() == 'david.zapata@bdjstudio.com';
+              final leading = CircleAvatar(
+                backgroundColor: isMasterAdmin ? const Color(0xFF00E5FF).withValues(alpha: 0.15) : null,
+                child: Icon(
+                  isMasterAdmin ? CupertinoIcons.shield_fill : CupertinoIcons.person_fill,
+                  color: isMasterAdmin ? const Color(0xFF00E5FF) : null,
+                ),
               );
               final title = Text(
                 admin.email,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: isMasterAdmin ? const Color(0xFF00E5FF) : null,
+                ),
               );
-              final subtitle = isOwner ? const Text('Propietario') : null;
+              final subtitle = isMasterAdmin
+                  ? const Text(
+                      'Creador & Super Admin Principal (Protegido)',
+                      style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
+                    )
+                  : (isCurrent
+                      ? const Text(
+                          'Sesión actual',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        )
+                      : null);
               final actions = <Widget>[
-                if (isOwner)
+                if (isCurrent)
                   TextButton.icon(
                     onPressed: () => _showChangePasswordDialog(admin),
                     icon: const Icon(CupertinoIcons.lock_shield, size: 16),
@@ -2163,14 +2659,9 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       foregroundColor: const Color(0xFF5E5CE6),
                     ),
                   )
-                else ...[
+                else if (!isMasterAdmin)
                   IconButton(
-                    tooltip: 'Editar Super Admin',
-                    icon: const Icon(CupertinoIcons.pencil, size: 18),
-                    onPressed: () => _showEditAdminDialog(admin),
-                  ),
-                  IconButton(
-                    tooltip: 'Eliminar Super Admin',
+                    tooltip: 'Eliminar Administrador',
                     icon: const Icon(
                       CupertinoIcons.trash,
                       size: 18,
@@ -2178,7 +2669,6 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     ),
                     onPressed: () => _deleteAdmin(admin),
                   ),
-                ],
               ];
               return LayoutBuilder(
                 builder: (context, constraints) {
@@ -2190,7 +2680,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _roleBadge(),
+                          _roleBadge(admin.email),
                           const SizedBox(width: 8),
                           ...actions,
                         ],
@@ -2211,12 +2701,12 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   title,
-                                  if (isOwner) const Text('Propietario'),
+                                  if (subtitle != null) subtitle,
                                 ],
                               ),
                             ),
                             const SizedBox(width: 8),
-                            _roleBadge(),
+                            _roleBadge(admin.email),
                           ],
                         ),
                         Wrap(children: actions),
@@ -2232,97 +2722,17 @@ extension _LicenseDashboardView on _LicenseHomeState {
     ],
   );
 
-  Future<void> _showEditAdminDialog(AdminAccount admin) async {
-    if (admin.id == null) {
-      updateDashboard(
-        () => error = 'Este Super Admin no tiene un identificador editable.',
+  Future<void> _deleteAdmin(AdminAccount admin) async {
+    if (admin.email.trim().toLowerCase() == 'david.zapata@bdjstudio.com') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('La cuenta de david.zapata@bdjstudio.com es el creador principal y no puede ser eliminada.'),
+          backgroundColor: Colors.redAccent,
+        ),
       );
       return;
     }
-    final email = TextEditingController(text: admin.email);
-    final password = TextEditingController();
-    var hidePassword = true;
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 24,
-          ),
-          title: const Text('Editar Super Admin'),
-          content: SizedBox(
-            width: MediaQuery.sizeOf(context).width >= 520
-                ? 400
-                : double.maxFinite,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: email,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(labelText: 'Correo'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: password,
-                  obscureText: hidePassword,
-                  enableSuggestions: false,
-                  autocorrect: false,
-                  decoration: InputDecoration(
-                    labelText: 'Nueva contraseña (opcional)',
-                    suffixIcon: IconButton(
-                      tooltip: hidePassword
-                          ? 'Mostrar contraseña'
-                          : 'Ocultar contraseña',
-                      icon: Icon(
-                        hidePassword
-                            ? CupertinoIcons.eye_slash
-                            : CupertinoIcons.eye,
-                      ),
-                      onPressed: () =>
-                          setDialogState(() => hidePassword = !hidePassword),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Guardar'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (accepted == true) {
-      await runWithLoading(
-        message: 'Actualizando Super Admin...',
-        action: () async {
-          try {
-            await widget.issuer.updateAdmin(
-              admin.id!,
-              email: email.text,
-              password: password.text.isEmpty ? null : password.text,
-            );
-            updateDashboard(() => error = null);
-          } on Object catch (exception) {
-            updateDashboard(() => error = exception.toString());
-          }
-        },
-      );
-    }
-    email.dispose();
-    password.dispose();
-  }
-
-  Future<void> _deleteAdmin(AdminAccount admin) async {
+    final adminId = admin.id ?? admin.email;
     final confirmed = await _confirmAction(
       title: 'Eliminar Super Admin',
       message: '${admin.email} perder\u00e1 el acceso a esta aplicaci\u00f3n.',
@@ -2333,12 +2743,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
       message: 'Eliminando Super Admin...',
       action: () async {
         try {
-          if (admin.id == null) {
-            throw StateError(
-              'Administrador heredado sin identificador remoto.',
-            );
-          }
-          await widget.issuer.deleteAdmin(admin.id!);
+          await widget.issuer.deleteAdmin(adminId);
           updateDashboard(() => error = null);
         } on Object catch (exception) {
           updateDashboard(() => error = exception.toString());
@@ -2734,17 +3139,24 @@ extension _LicenseDashboardView on _LicenseHomeState {
     device.dispose();
   }
 
-  Widget _roleBadge() => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-    decoration: BoxDecoration(
-      color: const Color(0x3330D158),
-      borderRadius: BorderRadius.circular(20),
-    ),
-    child: const Text(
-      'Super Admin',
-      style: TextStyle(color: Color(0xFF30D158), fontWeight: FontWeight.w600),
-    ),
-  );
+  Widget _roleBadge([String? email]) {
+    final isMaster = (email ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+      decoration: BoxDecoration(
+        color: isMaster ? const Color(0x3300E5FF) : const Color(0x3330D158),
+        borderRadius: BorderRadius.circular(20),
+        border: isMaster ? Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.5), width: 1) : null,
+      ),
+      child: Text(
+        isMaster ? 'Super Admin' : 'Administrador',
+        style: TextStyle(
+          color: isMaster ? const Color(0xFF00E5FF) : const Color(0xFF30D158),
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
 
   String _customerDisplayName(LicenseRecord record) {
     final id = record.customerId;

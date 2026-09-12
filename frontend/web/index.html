@@ -1,46 +1,203 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="BDJ Studio License - Administración y Emisión de Licencias Offline">
+  <meta name="theme-color" content="#0A0C10">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="bdj_license_console">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="BDJ Studio License">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>bdj_license_console</title>
+  <title>BDJ Studio License</title>
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #0A0C10;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    #bdj-splash {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: radial-gradient(circle at 50% 42%, #141824 0%, #0A0C10 75%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 999999;
+      transition: opacity 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .splash-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 32px;
+      max-width: 360px;
+    }
+
+    .splash-icon-wrapper {
+      position: relative;
+      width: 86px;
+      height: 86px;
+      border-radius: 22px;
+      background: linear-gradient(135deg, rgba(0, 229, 255, 0.15), rgba(124, 77, 255, 0.18));
+      border: 1px solid rgba(0, 229, 255, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 35px rgba(0, 229, 255, 0.28);
+      animation: pulse-glow 2.4s infinite ease-in-out;
+    }
+
+    .splash-icon {
+      width: 56px;
+      height: 56px;
+      object-fit: contain;
+      border-radius: 12px;
+    }
+
+    .splash-title {
+      margin: 22px 0 6px;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #FFFFFF 40%, #00E5FF 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .splash-subtitle {
+      margin: 0 0 28px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.55);
+    }
+
+    .splash-progress-track {
+      width: 210px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .splash-progress-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      width: 50%;
+      background: linear-gradient(90deg, #7C4DFF, #00E5FF);
+      border-radius: 999px;
+      box-shadow: 0 0 10px #00E5FF;
+      animation: progress-indeterminate 1.4s infinite ease-in-out;
+    }
+
+    .splash-status {
+      margin-top: 14px;
+      font-size: 12px;
+      color: rgba(0, 229, 255, 0.85);
+      font-weight: 500;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 25px rgba(0, 229, 255, 0.2);
+        border-color: rgba(0, 229, 255, 0.3);
+      }
+      50% {
+        transform: scale(1.04);
+        box-shadow: 0 0 45px rgba(0, 229, 255, 0.45);
+        border-color: rgba(0, 229, 255, 0.6);
+      }
+    }
+
+    @keyframes progress-indeterminate {
+      0% {
+        left: -40%;
+        width: 40%;
+      }
+      50% {
+        left: 20%;
+        width: 60%;
+      }
+      100% {
+        left: 100%;
+        width: 40%;
+      }
+    }
+  </style>
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
+  <div id="bdj-splash">
+    <div class="splash-card">
+      <div class="splash-icon-wrapper">
+        <img src="icon.png" alt="BDJ Studio" class="splash-icon" onerror="this.src='favicon.png'">
+      </div>
+      <div class="splash-title">BDJ Studio License</div>
+      <div class="splash-subtitle">Panel de Emisión y Seguridad</div>
+      <div class="splash-progress-track">
+        <div class="splash-progress-bar"></div>
+      </div>
+      <div class="splash-status">Iniciando entorno seguro...</div>
+    </div>
+  </div>
 
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
+  <script>
+    function removeSplash() {
+      var splash = document.getElementById('bdj-splash');
+      if (splash && splash.style.opacity !== '0') {
+        splash.style.opacity = '0';
+        splash.style.pointerEvents = 'none';
+        setTimeout(function() {
+          if (splash && splash.parentNode) {
+            splash.parentNode.removeChild(splash);
+          }
+        }, 500);
+      }
+    }
+
+    window.addEventListener('flutter-first-frame', removeSplash);
+
+    var splashObserver = new MutationObserver(function(mutations, obs) {
+      if (document.querySelector('flt-glass-pane') || document.querySelector('flutter-view')) {
+        setTimeout(removeSplash, 100);
+        obs.disconnect();
+      }
+    });
+    splashObserver.observe(document.body, { childList: true, subtree: true });
+
+    // Máximo tiempo de seguridad (fallback)
+    setTimeout(removeSplash, 10000);
+  </script>
+
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

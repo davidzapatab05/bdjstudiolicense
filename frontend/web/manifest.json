@@ -1,11 +1,11 @@
 {
-    "name": "bdj_license_console",
-    "short_name": "bdj_license_console",
+    "name": "BDJ Studio License",
+    "short_name": "BDJ License",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#0A0C10",
+    "theme_color": "#00E5FF",
+    "description": "Sistema de gestión y emisión de licencias offline BDJ Studio.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
