@@ -1,0 +1,45 @@
+﻿name: Deploy Flutter Web to Vercel
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout bdj_license_core
+        uses: actions/checkout@v4
+        with:
+          repository: dzapataba/bdjstudiolicensecore
+          path: bdj_license_core
+
+      - name: Checkout BDJ_Studio_License
+        uses: actions/checkout@v4
+        with:
+          path: BDJ_Studio_License
+
+      - name: Setup Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install dependencies
+        working-directory: BDJ_Studio_License/frontend
+        run: flutter pub get
+
+      - name: Compile Flutter Web
+        working-directory: BDJ_Studio_License/frontend
+        run: flutter build web --release --base-href "/"
+
+      - name: Deploy to Vercel Production
+        working-directory: BDJ_Studio_License/frontend/build/web
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: team_OZ4esVtks9yDI0XAVHnrieSJ
+          VERCEL_PROJECT_ID: prj_kCPQtcLAUBXeoLos8KJOTrGTS3F2
+        run: |
+          npx vercel --prod --token=$VERCEL_TOKEN --yes
