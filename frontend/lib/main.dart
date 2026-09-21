@@ -626,6 +626,8 @@ class LicenseIssuer {
   static const _blockedDevicesKey = 'issuer_blocked_devices_v1';
   static const _syncQueueKey = 'issuer_sync_queue_v1';
   static const _currentSessionEmailKey = 'issuer_session_email_v1';
+  static const _sessionTokenKey = 'issuer_session_auth_token_v2';
+  static const _sessionHmacSecret = 'BDJ_STUDIO_AUTH_SESSION_SECRET_V1_2026';
   static const _maxAttempts = 5;
   static const _pbkdf2Iterations = 210000;
   static const _bootstrapFileName = 'issuer.private.json';
@@ -687,85 +689,116 @@ class LicenseIssuer {
         _adminCertificate!.isExpired) {
       await _provisionSpp3OperatorKeys();
     }
-    final storedRecords = prefs!.getStringList(_recordsKey) ?? const [];
+    // Purgar almacenamiento local para cumplir con:
+    // "Que todo se maneje en la bd toda la gestión de licencias nada en el localstorage"
+    await prefs?.remove(_recordsKey);
+    await prefs?.remove(_customersKey);
+    await prefs?.remove(_blockedDevicesKey);
+    await prefs?.remove(_adminsKey);
+    await prefs?.remove(_syncQueueKey);
+    await prefs?.remove(_currentSessionEmailKey); // Purgar email en texto plano inseguro
+
     records.clear();
-    for (final value in storedRecords) {
-      try {
-        records.add(
-          LicenseRecord.fromJson(jsonDecode(value) as Map<String, dynamic>),
-        );
-      } on FormatException {
-        // Ignore a damaged audit entry without blocking access to the issuer.
-      } on TypeError {
-        // Ignore legacy entries with an incompatible schema.
-      }
-    }
-    final recordsWereConsolidated = _consolidateLicenseRecords();
-    if (recordsWereConsolidated) {
-      await _saveLicenseRecords();
-    }
     customers.clear();
-    for (final value
-        in prefs!.getStringList(_customersKey) ?? const <String>[]) {
-      try {
-        customers.add(
-          CustomerRecord.fromJson(jsonDecode(value) as Map<String, dynamic>),
-        );
-      } on FormatException {
-        // A damaged local row must not prevent the console from starting.
-      } on TypeError {
-        // Ignore rows written with an incompatible legacy schema.
-      }
-    }
     admins.clear();
-    for (final value in prefs!.getStringList(_adminsKey) ?? const <String>[]) {
-      try {
-        admins.add(
-          AdminAccount.fromJson(jsonDecode(value) as Map<String, dynamic>),
-        );
-      } catch (_) {}
-    }
+    blockedDevices.clear();
+
     await _restoreTestAdminIfMissing();
 
-    blockedDevices.clear();
-    for (final value
-        in prefs!.getStringList(_blockedDevicesKey) ?? const <String>[]) {
-      try {
-        blockedDevices.add(
-          BlockedDeviceRecord.fromJson(
-            jsonDecode(value) as Map<String, dynamic>,
-          ),
-        );
-      } on FormatException {
-        // A damaged local row must not prevent the console from starting.
-      } on TypeError {
-        // Ignore rows written with an incompatible legacy schema.
-      }
-    }
+    // Cargar directamente desde Supabase y restaurar sesión segura
+    await syncWithCloud();
+  }
 
-    final savedSession = prefs!.getString(_currentSessionEmailKey);
-    if (savedSession != null && savedSession.isNotEmpty) {
-      for (final a in admins) {
-        if (a.email.toLowerCase() == savedSession.toLowerCase() && a.isActive) {
-          unlocked = true;
-          currentUser = a.email;
-          currentRole = a.role;
-          break;
-        }
+  String _generateSessionToken(AdminAccount admin) {
+    final issuedAt = DateTime.now().millisecondsSinceEpoch;
+    // Sesión válida por 7 días
+    final expiresAt = DateTime.now().add(const Duration(days: 7)).millisecondsSinceEpoch;
+    final payload = '${admin.email.trim().toLowerCase()}|$issuedAt|$expiresAt|${admin.passwordHash}';
+    final hmac = crypto.Hmac(crypto.sha256, utf8.encode(_sessionHmacSecret));
+    final signature = hmac.convert(utf8.encode(payload)).toString();
+    return jsonEncode({
+      'email': admin.email.trim().toLowerCase(),
+      'issuedAt': issuedAt,
+      'expiresAt': expiresAt,
+      'sig': signature,
+    });
+  }
+
+  bool _verifySessionToken(String tokenJson, AdminAccount admin) {
+    try {
+      final map = jsonDecode(tokenJson) as Map<String, dynamic>;
+      final email = (map['email'] as String?)?.trim().toLowerCase();
+      final issuedAt = map['issuedAt'] as int?;
+      final expiresAt = map['expiresAt'] as int?;
+      final sig = map['sig'] as String?;
+
+      if (email == null || issuedAt == null || expiresAt == null || sig == null) {
+        return false;
       }
+      if (email != admin.email.trim().toLowerCase()) return false;
+      if (!admin.isActive) return false;
+
+      // Verificar expiración
+      if (DateTime.now().millisecondsSinceEpoch > expiresAt) return false;
+
+      // Recomputar firma HMAC con el hash PBKDF2 verificado de la BD
+      final payload = '$email|$issuedAt|$expiresAt|${admin.passwordHash}';
+      final hmac = crypto.Hmac(crypto.sha256, utf8.encode(_sessionHmacSecret));
+      final expectedSig = hmac.convert(utf8.encode(payload)).toString();
+
+      return _constantTimeEquals(utf8.encode(sig), utf8.encode(expectedSig));
+    } catch (_) {
+      return false;
     }
-    unawaited(syncWithCloud().then((_) {
-      if (!unlocked && savedSession != null && savedSession.isNotEmpty) {
-        for (final a in admins) {
-          if (a.email.toLowerCase() == savedSession.toLowerCase() && a.isActive) {
-            unlocked = true;
-            currentUser = a.email;
-            currentRole = a.role;
-            break;
-          }
-        }
+  }
+
+  Future<void> _restoreSecureSession() async {
+    final tokenJson = prefs?.getString(_sessionTokenKey);
+    if (tokenJson == null || tokenJson.isEmpty) return;
+
+    try {
+      final map = jsonDecode(tokenJson) as Map<String, dynamic>;
+      final email = (map['email'] as String?)?.trim().toLowerCase();
+      if (email == null) {
+        await _clearSessionToken();
+        return;
       }
-    }));
+
+      // Buscar admin en los datos oficiales de Supabase
+      final admin = admins.cast<AdminAccount?>().firstWhere(
+        (a) => a?.email.trim().toLowerCase() == email && (a?.isActive ?? false),
+        orElse: () => null,
+      );
+
+      if (admin == null) {
+        // Usuario eliminado o desactivado en la BD: revocar acceso inmediatamente
+        await _clearSessionToken();
+        unlocked = false;
+        currentUser = null;
+        currentRole = null;
+        return;
+      }
+
+      // Validar firma HMAC anti-tampering
+      if (_verifySessionToken(tokenJson, admin)) {
+        unlocked = true;
+        currentUser = admin.email;
+        currentRole = admin.role;
+      } else {
+        // Firma alterada o contraseña cambiada: rechazar acceso
+        await _clearSessionToken();
+        unlocked = false;
+        currentUser = null;
+        currentRole = null;
+      }
+    } catch (_) {
+      await _clearSessionToken();
+    }
+  }
+
+  Future<void> _clearSessionToken() async {
+    await prefs?.remove(_sessionTokenKey);
+    await prefs?.remove(_currentSessionEmailKey);
   }
 
   Future<void> syncWithCloud() async {
@@ -784,39 +817,33 @@ class LicenseIssuer {
       final cloudAdmins = results[3] as List<AdminAccount>?;
 
       // Supabase es la ÚNICA FUENTE DE VERDAD.
-      // Si la consulta fue exitosa (no es null), el estado local se reemplaza
-      // fielmente por lo que está en la nube.
-      // NUNCA resubimos 'localOnly', pues son registros que fueron eliminados por otro administrador.
+      // Todo se maneja en la BD y en memoria durante la sesión; nada en localStorage.
       if (cloudCustomers != null) {
         customers
           ..clear()
           ..addAll(cloudCustomers);
-        await prefs?.setStringList(
-          _customersKey,
-          customers.map((item) => jsonEncode(item.toJson())).toList(),
-        );
       }
 
       if (cloudLicenses != null) {
         records
           ..clear()
           ..addAll(cloudLicenses);
-        await _saveLicenseRecords();
       }
 
       if (cloudBlocks != null) {
         blockedDevices
           ..clear()
           ..addAll(cloudBlocks);
-        await _saveBlockedDevices();
       }
 
       if (cloudAdmins != null && cloudAdmins.isNotEmpty) {
         admins
           ..clear()
           ..addAll(cloudAdmins);
-        await _saveAdmins();
       }
+
+      // Validar y restaurar la sesión protegida con HMAC
+      await _restoreSecureSession();
     } catch (e) {
       debugPrint('Error en syncWithCloud: $e');
     } finally {
@@ -1093,9 +1120,24 @@ class LicenseIssuer {
       unlocked = true;
       await _resetFailures();
       currentUser = normalizedEmail;
-      currentRole = 'super';
+      final currentAdmin = admins.firstWhere(
+        (a) => a.email.toLowerCase() == normalizedEmail,
+        orElse: () => AdminAccount(
+          email: normalizedEmail,
+          passwordHash: '',
+          role: 'super',
+          isActive: true,
+        ),
+      );
+      currentRole = currentAdmin.role;
       await _ensureCurrentUserInAdmins(cleanPassword);
-      await prefs!.setString(_currentSessionEmailKey, normalizedEmail);
+
+      final activeAdmin = admins.firstWhere(
+        (a) => a.email.toLowerCase() == normalizedEmail,
+      );
+      final sessionToken = _generateSessionToken(activeAdmin);
+      await prefs!.setString(_sessionTokenKey, sessionToken);
+      await prefs!.remove(_currentSessionEmailKey);
       return true;
     }
 
@@ -1103,10 +1145,7 @@ class LicenseIssuer {
   }
 
   Future<void> _saveAdmins() async {
-    await prefs!.setStringList(
-      _adminsKey,
-      admins.map((item) => jsonEncode(item.toJson())).toList(),
-    );
+    await prefs?.remove(_adminsKey);
   }
 
   /// Crea el superadministrador de una instalación sin usuarios. Nunca guarda
@@ -1417,6 +1456,7 @@ class LicenseIssuer {
     unlocked = false;
     currentUser = null;
     currentRole = null;
+    prefs?.remove(_sessionTokenKey);
     prefs?.remove(_currentSessionEmailKey);
   }
 
@@ -1461,10 +1501,6 @@ class LicenseIssuer {
           createdAt: existing.createdAt,
         );
         customers[existingIndex] = migrated;
-        await prefs!.setStringList(
-          _customersKey,
-          customers.map((item) => jsonEncode(item.toJson())).toList(),
-        );
         try {
           await supabase.syncCustomer(migrated);
         } catch (_) {}
@@ -1496,10 +1532,6 @@ class LicenseIssuer {
       createdAt: DateTime.now().toUtc(),
     );
     customers.add(newCustomer);
-    await prefs!.setStringList(
-      _customersKey,
-      customers.map((item) => jsonEncode(item.toJson())).toList(),
-    );
     try {
       await supabase.syncCustomer(newCustomer);
     } catch (_) {}
@@ -1541,10 +1573,6 @@ class LicenseIssuer {
     await _saveLicenseRecords();
 
     customers.removeWhere((customer) => customer.id == customerId);
-    await prefs!.setStringList(
-      _customersKey,
-      customers.map((item) => jsonEncode(item.toJson())).toList(),
-    );
     try {
       await supabase.deleteCustomer(customerId, device: targetDevice);
     } catch (_) {}
@@ -1597,23 +1625,12 @@ class LicenseIssuer {
       device: normalizedDevice,
       createdAt: current.createdAt,
     );
-    // Propagar el nuevo nombre a las licencias de este cliente: guardaban una
-    // copia del nombre al emitirse, y sin esto el Dashboard/actividad seguian
-    // mostrando el nombre viejo aunque el cliente ya se renombro.
-    var recordsChanged = false;
+    // Propagar el nuevo nombre a las licencias de este cliente
     for (var i = 0; i < records.length; i++) {
       if (records[i].customerId == customerId &&
           records[i].customerName != newName) {
         records[i] = records[i].copyWith(customerName: newName);
-        recordsChanged = true;
       }
-    }
-    await prefs!.setStringList(
-      _customersKey,
-      customers.map((item) => jsonEncode(item.toJson())).toList(),
-    );
-    if (recordsChanged) {
-      await _saveLicenseRecords();
     }
     try {
       await supabase.syncCustomer(customers[index]);
@@ -1726,10 +1743,9 @@ class LicenseIssuer {
     );
   }
 
-  Future<void> _saveBlockedDevices() => prefs!.setStringList(
-    _blockedDevicesKey,
-    blockedDevices.map((item) => jsonEncode(item.toJson())).toList(),
-  );
+  Future<void> _saveBlockedDevices() async {
+    await prefs?.remove(_blockedDevicesKey);
+  }
 
   // ignore: unused_element
   Future<void> _legacyAddAdminLocal(String email, String password) async {
@@ -2251,10 +2267,7 @@ class LicenseIssuer {
   }
 
   Future<void> _saveLicenseRecords() async {
-    await prefs!.setStringList(
-      _recordsKey,
-      records.map((record) => jsonEncode(record.toJson())).toList(),
-    );
+    await prefs?.remove(_recordsKey);
   }
 
   // ignore: unused_element

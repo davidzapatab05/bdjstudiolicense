@@ -10,6 +10,16 @@ const _productLabels = <String, String>{
   'bdj_studio_audio_analyzer': 'BDJ Studio Audio Analyzer',
 };
 
+String _formatDateTime(DateTime dt) {
+  final local = dt.toLocal();
+  final d = local.day.toString().padLeft(2, '0');
+  final m = local.month.toString().padLeft(2, '0');
+  final y = local.year.toString();
+  final h = local.hour.toString().padLeft(2, '0');
+  final min = local.minute.toString().padLeft(2, '0');
+  return '$d/$m/$y $h:$min';
+}
+
 String _formatCreator(String? creator) {
   if (creator == null || creator.trim().isEmpty || creator.trim().toLowerCase() == 'super admin') {
     return 'david.zapata';
@@ -56,10 +66,10 @@ extension _LicenseDashboardView on _LicenseHomeState {
                 ? TextButton.icon(
                     onPressed: logout,
                     icon: const Icon(CupertinoIcons.square_arrow_right),
-                    label: const Text('Cerrar sesi\u00f3n'),
+                    label: const Text('Cerrar sesión'),
                   )
                 : IconButton(
-                    tooltip: 'Cerrar sesi\u00f3n',
+                    tooltip: 'Cerrar sesión',
                     onPressed: logout,
                     icon: const Icon(CupertinoIcons.square_arrow_right),
                   ),
@@ -88,16 +98,12 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   updateDashboard(() => selectedSection = value),
               destinations: const [
                 NavigationDestination(
-                  icon: Icon(CupertinoIcons.square_grid_2x2_fill),
-                  label: 'Inicio',
-                ),
-                NavigationDestination(
                   icon: Icon(CupertinoIcons.person_2_square_stack_fill),
-                  label: 'Gesti\u00f3n',
+                  label: 'Gestión',
                 ),
                 NavigationDestination(
                   icon: Icon(CupertinoIcons.person_crop_circle_badge_checkmark),
-                  label: 'Usuarios',
+                  label: 'Administradores',
                 ),
               ],
             ),
@@ -114,8 +120,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
     child: Column(
       children: [
         for (final item in const [
-          (CupertinoIcons.square_grid_2x2_fill, 'Dashboard'),
-          (CupertinoIcons.person_2_square_stack_fill, 'Gesti\u00f3n'),
+          (CupertinoIcons.person_2_square_stack_fill, 'Gestión'),
           (CupertinoIcons.person_crop_circle_badge_checkmark, 'Administradores'),
         ].indexed)
           Padding(
@@ -156,9 +161,8 @@ extension _LicenseDashboardView on _LicenseHomeState {
   );
 
   Widget _dashboardSection() => switch (selectedSection) {
-    1 => _managementPage(),
-    2 => _usersPage(),
-    _ => _overviewPage(),
+    1 => _usersPage(),
+    _ => _managementPage(),
   };
 
   Widget _dashboardPage({
@@ -205,6 +209,8 @@ extension _LicenseDashboardView on _LicenseHomeState {
     ],
   );
 
+
+
   Widget _dashboardPanel(Widget child) => Container(
     padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 400 ? 14 : 22),
     decoration: BoxDecoration(
@@ -213,343 +219,6 @@ extension _LicenseDashboardView on _LicenseHomeState {
       border: Border.all(color: const Color(0xFF2A2A3B)),
     ),
     child: child,
-  );
-
-  Widget _dashboardMetric(
-    String label,
-    String value,
-    IconData icon,
-    Color color,
-  ) => Container(
-    width: double.infinity,
-    constraints: const BoxConstraints(minHeight: 118),
-    padding: const EdgeInsets.all(20),
-    decoration: BoxDecoration(
-      gradient: LinearGradient(
-        colors: [color.withValues(alpha: .20), const Color(0xFF181824)],
-      ),
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: color.withValues(alpha: .35)),
-    ),
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        final details = Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: constraints.maxWidth < 150
-              ? CrossAxisAlignment.center
-              : CrossAxisAlignment.start,
-          children: [
-            Text(
-              value,
-              style: const TextStyle(fontSize: 25, fontWeight: FontWeight.w800),
-            ),
-            SizedBox(
-              height: 38,
-              child: Align(
-                alignment: constraints.maxWidth < 150
-                    ? Alignment.topCenter
-                    : Alignment.topLeft,
-                child: Text(
-                  label,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: constraints.maxWidth < 150
-                      ? TextAlign.center
-                      : TextAlign.start,
-                  style: const TextStyle(color: Colors.white60),
-                ),
-              ),
-            ),
-          ],
-        );
-        final avatar = CircleAvatar(
-          backgroundColor: color.withValues(alpha: .18),
-          child: Icon(icon, color: color),
-        );
-
-        if (constraints.maxWidth < 150) {
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [avatar, const SizedBox(height: 12), details],
-          );
-        }
-        return Row(
-          children: [
-            avatar,
-            const SizedBox(width: 16),
-            Expanded(child: details),
-          ],
-        );
-      },
-    ),
-  );
-
-  Widget _overviewPage() => _dashboardPage(
-    title: 'Dashboard',
-    subtitle: 'Resumen de tu operaci\u00f3n de licencias offline.',
-    children: [
-      LayoutBuilder(
-        builder: (context, constraints) {
-          const gap = 14.0;
-          final columns = constraints.maxWidth >= 1040
-              ? 4
-              : constraints.maxWidth >= 560
-              ? 2
-              : 1;
-          final cardWidth =
-              (constraints.maxWidth - gap * (columns - 1)) / columns;
-          final currentCustomerIds = widget.issuer.customers
-              .map((customer) => customer.id)
-              .toSet();
-          final metrics = [
-            _dashboardMetric(
-              'Licencias activas',
-              '${widget.issuer.records.where((record) => record.isActive && currentCustomerIds.contains(record.customerId)).length}',
-              CupertinoIcons.ticket_fill,
-              const Color(0xFF7D5CFF),
-            ),
-            _dashboardMetric(
-              'Clientes',
-              '${widget.issuer.customers.length}',
-              CupertinoIcons.person_2_fill,
-              const Color(0xFF00E5FF),
-            ),
-            _dashboardMetric(
-              'Administradores',
-              '${widget.issuer.admins.where((admin) => admin.isActive).isNotEmpty ? widget.issuer.admins.where((admin) => admin.isActive).length : (widget.issuer.currentUser != null ? 1 : 0)}',
-              CupertinoIcons.shield_fill,
-              const Color(0xFF30D158),
-            ),
-            _dashboardMetric(
-              'Dispositivos bloqueados',
-              '${widget.issuer.blockedDevices.length}',
-              CupertinoIcons.nosign,
-              const Color(0xFFFF453A),
-            ),
-          ];
-          return Wrap(
-            spacing: gap,
-            runSpacing: gap,
-            children: metrics
-                .map((metric) => SizedBox(width: cardWidth, child: metric))
-                .toList(),
-          );
-        },
-      ),
-      const SizedBox(height: 18),
-      _dashboardPanel(
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final narrow = constraints.maxWidth < 600;
-            final textCol = const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(CupertinoIcons.archivebox_fill, color: Color(0xFF00E5FF), size: 18),
-                    SizedBox(width: 8),
-                    Text(
-                      'Copia de Seguridad de la Base de Datos',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'Descarga una copia completa de clientes, licencias y bloqueos en formato .json.',
-                  style: TextStyle(color: Colors.white60, fontSize: 13),
-                ),
-              ],
-            );
-            final exportBtn = FilledButton.icon(
-              onPressed: _exportFullBackupJson,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF1E2A38),
-                foregroundColor: const Color(0xFF00E5FF),
-                side: const BorderSide(color: Color(0xFF00E5FF), width: 1.2),
-              ),
-              icon: const Icon(CupertinoIcons.arrow_down_doc_fill, size: 16),
-              label: const Text('Exportar Respaldo (.json)'),
-            );
-            if (narrow) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  textCol,
-                  const SizedBox(height: 12),
-                  exportBtn,
-                ],
-              );
-            }
-            return Row(
-              children: [
-                Expanded(child: textCol),
-                const SizedBox(width: 16),
-                exportBtn,
-              ],
-            );
-          },
-        ),
-      ),
-      const SizedBox(height: 18),
-      _dashboardPanel(
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Wrap(
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                Icon(
-                  CupertinoIcons.clock_fill,
-                  color: Color(0xFF00E5FF),
-                  size: 20,
-                ),
-                SizedBox(width: 10),
-                Text(
-                  'Actividad de licencias emitidas',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Historial de licencias emitidas y el usuario que las generó.',
-              style: TextStyle(color: Colors.white60, fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            if (widget.issuer.records.isEmpty)
-              const _DashboardEmpty(
-                icon: CupertinoIcons.ticket,
-                message: 'Aún no se han generado licencias.',
-              )
-            else
-              ...widget.issuer.records.reversed.take(10).map((lic) {
-                return Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF141822),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: const Color(0xFF1E2530)),
-                  ),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final wide = constraints.maxWidth >= 640;
-                      final details = Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 7,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0x3364D2FF),
-                                  borderRadius: BorderRadius.circular(5),
-                                  border: Border.all(
-                                    color: const Color(0x6664D2FF),
-                                  ),
-                                ),
-                                child: Text(
-                                  lic.productLabel,
-                                  style: const TextStyle(
-                                    color: Color(0xFF00E5FF),
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  lic.customerName ?? lic.device,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 13,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 4,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              Text(
-                                'ID: ${_shortDeviceId(lic.device)} · ${lic.planLabel} · Emitida: ${_dashboardDate(lic.issuedAt)}',
-                                style: const TextStyle(
-                                  color: Colors.white54,
-                                  fontSize: 12,
-                                ),
-                              ),
-                              _buildLicenseExpirationBadge(lic),
-                            ],
-                          ),
-                        ],
-                      );
-                      final adminBadge = Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 9,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0x287C4DFF),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: const Color(0x667C4DFF)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              CupertinoIcons.person_badge_plus_fill,
-                              size: 13,
-                              color: Color(0xFFC4B5FD),
-                            ),
-                            const SizedBox(width: 5),
-                            Text(
-                              'Creada por: ${_formatCreator(lic.issuedBy)}',
-                              style: const TextStyle(
-                                color: Color(0xFFC4B5FD),
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (wide) {
-                        return Row(
-                          children: [
-                            Expanded(child: details),
-                            const SizedBox(width: 12),
-                            adminBadge,
-                          ],
-                        );
-                      }
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          details,
-                          const SizedBox(height: 8),
-                          adminBadge,
-                        ],
-                      );
-                    },
-                  ),
-                );
-              }),
-          ],
-        ),
-      ),
-    ],
   );
 
   Widget _managementPage() {
@@ -1519,10 +1188,49 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     ),
                   ],
                 ),
-                const SizedBox(height: 5),
-                SelectableText(
-                  '${customer.email}  ·  ID: ${customer.device}',
-                  style: const TextStyle(color: Colors.white60, fontSize: 13),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    SelectableText(
+                      '${customer.email}  ·  ID: ${customer.device}',
+                      style: const TextStyle(color: Colors.white60, fontSize: 13),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0x1F00E5FF),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: const Color(0x4D00E5FF),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            CupertinoIcons.calendar,
+                            size: 13,
+                            color: Color(0xFF00E5FF),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Registro: ${_formatDateTime(customer.createdAt)}',
+                            style: const TextStyle(
+                              color: Color(0xFF00E5FF),
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 10),
                 if (activeLicenses.isEmpty)
@@ -1629,6 +1337,38 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                   color: Colors.white70,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x1F30D158),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: const Color(0x4D30D158),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      CupertinoIcons.calendar_today,
+                                      size: 13,
+                                      color: Color(0xFF30D158),
+                                    ),
+                                    const SizedBox(width: 5),
+                                    Text(
+                                      'Emitida: ${_formatDateTime(lic.issuedAt)}',
+                                      style: const TextStyle(
+                                        color: Color(0xFF30D158),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               _buildLicenseExpirationBadge(lic),
@@ -1751,7 +1491,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                     if (confirm == true) {
                                       await widget.issuer.deleteLicense(lic.id);
                                       if (mounted) {
-                                        setState(() {});
+                                        updateDashboard(() {});
                                         ScaffoldMessenger.of(context).showSnackBar(
                                           SnackBar(
                                             content: Text('Licencia de ${lic.productLabel} eliminada.'),
