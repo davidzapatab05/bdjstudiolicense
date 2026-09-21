@@ -17,7 +17,7 @@ class SupabaseService {
     'Prefer': 'resolution=merge-duplicates,return=representation',
   };
 
-  Future<List<CustomerRecord>> fetchCustomers() async {
+  Future<List<CustomerRecord>?> fetchCustomers() async {
     try {
       final uri = Uri.parse('$supabaseUrl/rest/v1/customers?select=*&order=created_at.asc');
       final res = await http.get(uri, headers: _headers).timeout(_timeout);
@@ -37,7 +37,7 @@ class SupabaseService {
     } catch (e) {
       debugPrint('Supabase fetchCustomers error: $e');
     }
-    return [];
+    return null;
   }
 
   Future<void> syncCustomer(CustomerRecord customer) async {
@@ -78,18 +78,22 @@ class SupabaseService {
     }
   }
 
-  Future<void> deleteCustomer(String customerId) async {
+  Future<void> deleteCustomer(String customerId, {String? device}) async {
     try {
       final uriCust = Uri.parse('$supabaseUrl/rest/v1/customers?id=eq.${Uri.encodeComponent(customerId)}');
       await http.delete(uriCust, headers: _headers).timeout(_timeout);
       final uriLic = Uri.parse('$supabaseUrl/rest/v1/licenses?customer_id=eq.${Uri.encodeComponent(customerId)}');
       await http.delete(uriLic, headers: _headers).timeout(_timeout);
+      if (device != null && device.trim().isNotEmpty) {
+        final uriLicDev = Uri.parse('$supabaseUrl/rest/v1/licenses?device=eq.${Uri.encodeComponent(device.trim())}');
+        await http.delete(uriLicDev, headers: _headers).timeout(_timeout);
+      }
     } catch (e) {
       debugPrint('Supabase deleteCustomer error: $e');
     }
   }
 
-  Future<List<LicenseRecord>> fetchLicenses() async {
+  Future<List<LicenseRecord>?> fetchLicenses() async {
     try {
       final uri = Uri.parse('$supabaseUrl/rest/v1/licenses?select=*&order=issued_at.asc');
       final res = await http.get(uri, headers: _headers).timeout(_timeout);
@@ -117,7 +121,7 @@ class SupabaseService {
     } catch (e) {
       debugPrint('Supabase fetchLicenses error: $e');
     }
-    return [];
+    return null;
   }
 
   Future<void> syncLicense(LicenseRecord license) async {
@@ -183,7 +187,7 @@ class SupabaseService {
     }
   }
 
-  Future<List<BlockedDeviceRecord>> fetchBlockedDevices() async {
+  Future<List<BlockedDeviceRecord>?> fetchBlockedDevices() async {
     try {
       final uri = Uri.parse('$supabaseUrl/rest/v1/blocked_devices?select=*');
       final res = await http.get(uri, headers: _headers).timeout(_timeout);
@@ -202,7 +206,7 @@ class SupabaseService {
     } catch (e) {
       debugPrint('Supabase fetchBlockedDevices error: $e');
     }
-    return [];
+    return null;
   }
 
   Future<void> syncBlockedDevice(BlockedDeviceRecord block) async {
@@ -248,7 +252,7 @@ class SupabaseService {
     }
   }
 
-  Future<List<AdminAccount>> fetchAdmins() async {
+  Future<List<AdminAccount>?> fetchAdmins() async {
     try {
       final uri = Uri.parse('$supabaseUrl/rest/v1/admin_accounts?select=*');
       final res = await http.get(uri, headers: _headers).timeout(_timeout);
@@ -269,7 +273,7 @@ class SupabaseService {
     } catch (e) {
       debugPrint('Supabase fetchAdmins error: $e');
     }
-    return [];
+    return null;
   }
 
   Future<void> syncAdmin(AdminAccount admin) async {

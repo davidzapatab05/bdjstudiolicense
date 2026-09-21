@@ -778,78 +778,44 @@ class LicenseIssuer {
         supabase.fetchBlockedDevices(),
         supabase.fetchAdmins(),
       ]);
-      final cloudCustomers = results[0] as List<CustomerRecord>;
-      final cloudLicenses = results[1] as List<LicenseRecord>;
-      final cloudBlocks = results[2] as List<BlockedDeviceRecord>;
-      final cloudAdmins = results[3] as List<AdminAccount>;
+      final cloudCustomers = results[0] as List<CustomerRecord>?;
+      final cloudLicenses = results[1] as List<LicenseRecord>?;
+      final cloudBlocks = results[2] as List<BlockedDeviceRecord>?;
+      final cloudAdmins = results[3] as List<AdminAccount>?;
 
-      if (cloudCustomers.isEmpty && customers.isNotEmpty) {
-        await supabase.syncCustomersBulk(customers);
-      }
-      if (cloudLicenses.isEmpty && records.isNotEmpty) {
-        await supabase.syncLicensesBulk(records);
-      }
-      if (cloudBlocks.isEmpty && blockedDevices.isNotEmpty) {
-        await supabase.syncBlockedDevicesBulk(blockedDevices);
-      }
-      if (cloudAdmins.isEmpty && admins.isNotEmpty) {
-        await supabase.syncAdminsBulk(admins);
-      }
-
-      if (cloudCustomers.isNotEmpty) {
-        final cloudIds = cloudCustomers.map((c) => c.id).toSet();
-        final localOnly = customers.where((c) => !cloudIds.contains(c.id)).toList();
-        if (localOnly.isNotEmpty) {
-          await supabase.syncCustomersBulk(localOnly);
-        }
+      // Supabase es la ÚNICA FUENTE DE VERDAD.
+      // Si la consulta fue exitosa (no es null), el estado local se reemplaza
+      // fielmente por lo que está en la nube.
+      // NUNCA resubimos 'localOnly', pues son registros que fueron eliminados por otro administrador.
+      if (cloudCustomers != null) {
         customers
           ..clear()
-          ..addAll(cloudCustomers)
-          ..addAll(localOnly);
+          ..addAll(cloudCustomers);
         await prefs?.setStringList(
           _customersKey,
           customers.map((item) => jsonEncode(item.toJson())).toList(),
         );
       }
 
-      if (cloudLicenses.isNotEmpty) {
-        final cloudIds = cloudLicenses.map((l) => l.id).toSet();
-        final localOnly = records.where((r) => !cloudIds.contains(r.id)).toList();
-        if (localOnly.isNotEmpty) {
-          await supabase.syncLicensesBulk(localOnly);
-        }
+      if (cloudLicenses != null) {
         records
           ..clear()
-          ..addAll(cloudLicenses)
-          ..addAll(localOnly);
+          ..addAll(cloudLicenses);
         await _saveLicenseRecords();
       }
 
-      if (cloudBlocks.isNotEmpty) {
-        final cloudDeviceIds = cloudBlocks.map((b) => b.device.toLowerCase()).toSet();
-        final localOnly = blockedDevices.where((b) => !cloudDeviceIds.contains(b.device.toLowerCase())).toList();
-        if (localOnly.isNotEmpty) {
-          await supabase.syncBlockedDevicesBulk(localOnly);
-        }
+      if (cloudBlocks != null) {
         blockedDevices
           ..clear()
-          ..addAll(cloudBlocks)
-          ..addAll(localOnly);
+          ..addAll(cloudBlocks);
         await _saveBlockedDevices();
       }
 
-      if (cloudAdmins.isNotEmpty) {
-        for (final ca in cloudAdmins) {
-          final idx = admins.indexWhere((a) => a.email.toLowerCase() == ca.email.toLowerCase());
-          if (idx >= 0) {
-            admins[idx] = ca;
-          } else {
-            admins.add(ca);
-          }
-        }
+      if (cloudAdmins != null && cloudAdmins.isNotEmpty) {
+        admins
+          ..clear()
+          ..addAll(cloudAdmins);
         await _saveAdmins();
-      } else if (admins.isNotEmpty) {
-        await supabase.syncAdminsBulk(admins);
       }
     } catch (e) {
       debugPrint('Error en syncWithCloud: $e');
@@ -1560,8 +1526,18 @@ class LicenseIssuer {
       throw StateError('Solo un Super Admin puede eliminar clientes.');
     }
 
-    // Optimización de CRUD: eliminamos localmente en memoria sin iterar en red por cada licencia.
-    records.removeWhere((r) => r.customerId == customerId);
+    final targetCustomer = customers.cast<CustomerRecord?>().firstWhere(
+      (c) => c?.id == customerId,
+      orElse: () => null,
+    );
+    final targetDevice = targetCustomer?.device.trim();
+
+    // Eliminamos localmente las licencias asociadas al cliente y/o su dispositivo
+    records.removeWhere((r) =>
+        r.customerId == customerId ||
+        (targetDevice != null &&
+            targetDevice.isNotEmpty &&
+            r.device.trim().toLowerCase() == targetDevice.toLowerCase()));
     await _saveLicenseRecords();
 
     customers.removeWhere((customer) => customer.id == customerId);
@@ -1570,7 +1546,7 @@ class LicenseIssuer {
       customers.map((item) => jsonEncode(item.toJson())).toList(),
     );
     try {
-      await supabase.deleteCustomer(customerId);
+      await supabase.deleteCustomer(customerId, device: targetDevice);
     } catch (_) {}
 
     // En backend se borran en cascada las licencias vinculadas en una sola petición.
@@ -1579,6 +1555,17 @@ class LicenseIssuer {
       const {},
       method: 'DELETE',
     );
+  }
+
+  Future<void> deleteLicense(String licenseId) async {
+    if (currentRole != 'super') {
+      throw StateError('Solo un Super Admin puede eliminar licencias.');
+    }
+    records.removeWhere((r) => r.id == licenseId);
+    await _saveLicenseRecords();
+    try {
+      await supabase.deleteLicense(licenseId);
+    } catch (_) {}
   }
 
   Future<void> updateCustomer(

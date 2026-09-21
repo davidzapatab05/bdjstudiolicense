@@ -1719,6 +1719,76 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                   ),
                                 ),
                               ),
+                              if (widget.issuer.currentRole == 'super') ...[
+                                InkWell(
+                                  borderRadius: BorderRadius.circular(4),
+                                  onTap: () async {
+                                    final confirm = await showDialog<bool>(
+                                      context: context,
+                                      builder: (ctx) => AlertDialog(
+                                        backgroundColor: const Color(0xFF1E2235),
+                                        title: const Text(
+                                          'Eliminar Licencia',
+                                          style: TextStyle(color: Colors.white),
+                                        ),
+                                        content: Text(
+                                          '¿Deseas eliminar la licencia de "${lic.productLabel}" para ${customer.name}?',
+                                          style: const TextStyle(color: Colors.white70),
+                                        ),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.of(ctx).pop(false),
+                                            child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+                                          ),
+                                          ElevatedButton(
+                                            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                                            onPressed: () => Navigator.of(ctx).pop(true),
+                                            child: const Text('Eliminar', style: TextStyle(color: Colors.white)),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    if (confirm == true) {
+                                      await widget.issuer.deleteLicense(lic.id);
+                                      if (mounted) {
+                                        setState(() {});
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Licencia de ${lic.productLabel} eliminada.'),
+                                            duration: const Duration(seconds: 2),
+                                            behavior: SnackBarBehavior.floating,
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  },
+                                  child: const Padding(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 2,
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          CupertinoIcons.trash,
+                                          size: 14,
+                                          color: Colors.redAccent,
+                                        ),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          'Eliminar',
+                                          style: TextStyle(
+                                            color: Colors.redAccent,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         );
