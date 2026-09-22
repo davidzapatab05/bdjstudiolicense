@@ -80,14 +80,16 @@ class SupabaseService {
 
   Future<void> deleteCustomer(String customerId, {String? device}) async {
     try {
-      final uriCust = Uri.parse('$supabaseUrl/rest/v1/customers?id=eq.${Uri.encodeComponent(customerId)}');
-      await http.delete(uriCust, headers: _headers).timeout(_timeout);
+      // Eliminar licencias PRIMERO para respetar FK constraints
       final uriLic = Uri.parse('$supabaseUrl/rest/v1/licenses?customer_id=eq.${Uri.encodeComponent(customerId)}');
       await http.delete(uriLic, headers: _headers).timeout(_timeout);
       if (device != null && device.trim().isNotEmpty) {
         final uriLicDev = Uri.parse('$supabaseUrl/rest/v1/licenses?device=eq.${Uri.encodeComponent(device.trim())}');
         await http.delete(uriLicDev, headers: _headers).timeout(_timeout);
       }
+      // Luego eliminar el cliente
+      final uriCust = Uri.parse('$supabaseUrl/rest/v1/customers?id=eq.${Uri.encodeComponent(customerId)}');
+      await http.delete(uriCust, headers: _headers).timeout(_timeout);
     } catch (e) {
       debugPrint('Supabase deleteCustomer error: $e');
     }
@@ -184,71 +186,6 @@ class SupabaseService {
       await http.delete(uri, headers: _headers).timeout(_timeout);
     } catch (e) {
       debugPrint('Supabase deleteLicense error: $e');
-    }
-  }
-
-  Future<List<BlockedDeviceRecord>?> fetchBlockedDevices() async {
-    try {
-      final uri = Uri.parse('$supabaseUrl/rest/v1/blocked_devices?select=*');
-      final res = await http.get(uri, headers: _headers).timeout(_timeout);
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body) as List;
-        return data.map((item) {
-          final m = item as Map<String, dynamic>;
-          return BlockedDeviceRecord(
-            device: m['device'] as String,
-            reason: m['reason'] as String,
-            blockedAt: DateTime.parse(m['blocked_at'] as String),
-            customerId: m['customer_id'] as String?,
-          );
-        }).toList();
-      }
-    } catch (e) {
-      debugPrint('Supabase fetchBlockedDevices error: $e');
-    }
-    return null;
-  }
-
-  Future<void> syncBlockedDevice(BlockedDeviceRecord block) async {
-    try {
-      final uri = Uri.parse('$supabaseUrl/rest/v1/blocked_devices');
-      await http.post(
-        uri,
-        headers: _headers,
-        body: jsonEncode({
-          'device': block.device,
-          'reason': block.reason,
-          'blocked_at': block.blockedAt.toIso8601String(),
-          'customer_id': block.customerId,
-        }),
-      ).timeout(_timeout);
-    } catch (e) {
-      debugPrint('Supabase syncBlockedDevice error: $e');
-    }
-  }
-
-  Future<void> syncBlockedDevicesBulk(List<BlockedDeviceRecord> list) async {
-    if (list.isEmpty) return;
-    try {
-      final uri = Uri.parse('$supabaseUrl/rest/v1/blocked_devices');
-      final body = list.map((block) => {
-        'device': block.device,
-        'reason': block.reason,
-        'blocked_at': block.blockedAt.toIso8601String(),
-        'customer_id': block.customerId,
-      }).toList();
-      await http.post(uri, headers: _headers, body: jsonEncode(body)).timeout(_timeout);
-    } catch (e) {
-      debugPrint('Supabase syncBlockedDevicesBulk error: $e');
-    }
-  }
-
-  Future<void> deleteBlockedDevice(String device) async {
-    try {
-      final uri = Uri.parse('$supabaseUrl/rest/v1/blocked_devices?device=eq.${Uri.encodeComponent(device)}');
-      await http.delete(uri, headers: _headers).timeout(_timeout);
-    } catch (e) {
-      debugPrint('Supabase deleteBlockedDevice error: $e');
     }
   }
 

@@ -38,20 +38,21 @@ void main() {
     expect(restored.issuedBy, 'david.zapata@bdjstudio.com');
   });
 
-  test('blocked devices preserve cloud-ready fields and match safely', () {
-    final blockedAt = DateTime.utc(2026, 7, 22, 13);
-    final blocked = BlockedDeviceRecord(
+  test('customer records preserve serialization and date fields', () {
+    final createdAt = DateTime.utc(2026, 7, 22, 13);
+    final customer = CustomerRecord(
+      id: 'customer-1',
+      name: 'DJ David',
+      email: 'david@example.com',
       device: 'DEVICE-ABC-123',
-      reason: 'Fraude confirmado',
-      blockedAt: blockedAt,
-      customerId: 'customer-1',
+      createdAt: createdAt,
     );
-    final restored = BlockedDeviceRecord.fromJson(blocked.toJson());
-    final issuer = LicenseIssuer()..blockedDevices.add(restored);
+    final restored = CustomerRecord.fromJson(customer.toJson());
 
-    expect(restored.reason, 'Fraude confirmado');
-    expect(restored.blockedAt, blockedAt);
-    expect(restored.customerId, 'customer-1');
-    expect(issuer.isDeviceBlocked('device-abc-123'), isTrue);
+    expect(restored.id, 'customer-1');
+    expect(restored.name, 'DJ David');
+    expect(restored.email, 'david@example.com');
+    expect(restored.device, 'DEVICE-ABC-123');
+    expect(restored.createdAt, createdAt);
   });
 }

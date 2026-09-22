@@ -152,18 +152,9 @@ class LicenseHome extends StatefulWidget {
 class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
   final email = TextEditingController();
   final password = TextEditingController();
-  final deviceId = TextEditingController();
-  final customerName = TextEditingController();
-  final customerEmail = TextEditingController();
   final adminEmail = TextEditingController();
   final adminPassword = TextEditingController();
-  final blockReason = TextEditingController();
   final customerSearch = TextEditingController();
-  var selectedProducts = <String>{'bdj_studio_sample_pad'};
-  var plan = LicensePlan.permanent;
-  var customYears = 0;
-  var customMonths = 0;
-  var customDaysInput = 0;
   var obscurePassword = true;
   var obscureAdminPassword = true;
   var selectedSection = 0;
@@ -206,12 +197,8 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
     _liveSyncTimer?.cancel();
     email.dispose();
     password.dispose();
-    deviceId.dispose();
-    customerName.dispose();
-    customerEmail.dispose();
     adminEmail.dispose();
     adminPassword.dispose();
-    blockReason.dispose();
     customerSearch.dispose();
     super.dispose();
   }
@@ -251,33 +238,6 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
         password: password.text,
       );
       setState(() => error = null);
-    } on Object catch (exception) {
-      setState(() => error = exception.toString());
-    } finally {
-      if (mounted) {
-        setState(() => isProcessing = false);
-      }
-    }
-  }
-
-  Future<void> addCustomer() async {
-    if (isProcessing) return;
-    setState(() {
-      isProcessing = true;
-      processingMessage = 'Guardando datos del cliente...';
-    });
-    try {
-      await widget.issuer.addCustomer(
-        customerName.text.trim(),
-        customerEmail.text.trim(),
-        deviceId.text.trim(),
-      );
-      customerName.clear();
-      customerEmail.clear();
-      setState(() {
-        deviceId.clear();
-        error = null;
-      });
     } on Object catch (exception) {
       setState(() => error = exception.toString());
     } finally {
@@ -623,8 +583,6 @@ class LicenseIssuer {
   static const _customersKey = 'issuer_customers_v1';
   static const _adminsKey = 'issuer_admins_v1';
   static const _testAdminsMigrationKey = 'issuer_test_admins_v2';
-  static const _blockedDevicesKey = 'issuer_blocked_devices_v1';
-  static const _syncQueueKey = 'issuer_sync_queue_v1';
   static const _currentSessionEmailKey = 'issuer_session_email_v1';
   static const _sessionTokenKey = 'issuer_session_auth_token_v2';
   static const _sessionHmacSecret = 'BDJ_STUDIO_AUTH_SESSION_SECRET_V1_2026';
@@ -644,10 +602,8 @@ class LicenseIssuer {
   final List<LicenseRecord> records = [];
   final List<CustomerRecord> customers = [];
   final List<AdminAccount> admins = [];
-  final List<BlockedDeviceRecord> blockedDevices = [];
   final supabase = SupabaseService();
   bool isSyncing = false;
-  bool _flushingSyncQueue = false;
   bool get isConfigured => privateKey.isNotEmpty && publicKey.isNotEmpty;
 
   // Credenciales temporales de pruebas. Solo se almacena un verificador PBKDF2
@@ -693,20 +649,19 @@ class LicenseIssuer {
     // "Que todo se maneje en la bd toda la gestión de licencias nada en el localstorage"
     await prefs?.remove(_recordsKey);
     await prefs?.remove(_customersKey);
-    await prefs?.remove(_blockedDevicesKey);
     await prefs?.remove(_adminsKey);
-    await prefs?.remove(_syncQueueKey);
+    await prefs?.remove('issuer_sync_queue_v1');
     await prefs?.remove(_currentSessionEmailKey); // Purgar email en texto plano inseguro
 
     records.clear();
     customers.clear();
     admins.clear();
-    blockedDevices.clear();
 
     await _restoreTestAdminIfMissing();
 
     // Cargar directamente desde Supabase y restaurar sesión segura
     await syncWithCloud();
+    await _restoreSecureSession();
   }
 
   String _generateSessionToken(AdminAccount admin) {
@@ -808,13 +763,11 @@ class LicenseIssuer {
       final results = await Future.wait([
         supabase.fetchCustomers(),
         supabase.fetchLicenses(),
-        supabase.fetchBlockedDevices(),
         supabase.fetchAdmins(),
       ]);
       final cloudCustomers = results[0] as List<CustomerRecord>?;
       final cloudLicenses = results[1] as List<LicenseRecord>?;
-      final cloudBlocks = results[2] as List<BlockedDeviceRecord>?;
-      final cloudAdmins = results[3] as List<AdminAccount>?;
+      final cloudAdmins = results[2] as List<AdminAccount>?;
 
       // Supabase es la ÚNICA FUENTE DE VERDAD.
       // Todo se maneja en la BD y en memoria durante la sesión; nada en localStorage.
@@ -830,20 +783,29 @@ class LicenseIssuer {
           ..addAll(cloudLicenses);
       }
 
-      if (cloudBlocks != null) {
-        blockedDevices
-          ..clear()
-          ..addAll(cloudBlocks);
-      }
-
       if (cloudAdmins != null && cloudAdmins.isNotEmpty) {
         admins
           ..clear()
           ..addAll(cloudAdmins);
       }
 
-      // Validar y restaurar la sesión protegida con HMAC
-      await _restoreSecureSession();
+      // Si hay sesión activa, verificar que el admin siga existiendo y activo
+      // en la BD. NO re-verificamos HMAC aquí para evitar invalidaciones
+      // por diferencias de hash entre memoria y Supabase.
+      if (unlocked && currentUser != null) {
+        final stillExists = admins.any(
+          (a) =>
+              a.email.trim().toLowerCase() == currentUser!.toLowerCase() &&
+              a.isActive,
+        );
+        if (!stillExists) {
+          // Admin eliminado o desactivado en la BD: revocar acceso
+          await _clearSessionToken();
+          unlocked = false;
+          currentUser = null;
+          currentRole = null;
+        }
+      }
     } catch (e) {
       debugPrint('Error en syncWithCloud: $e');
     } finally {
@@ -983,50 +945,6 @@ class LicenseIssuer {
     );
   }
 
-  Future<void> _ensureCurrentUserInAdmins([String? password]) async {
-    if (currentUser != null && currentUser!.isNotEmpty) {
-      final normalized = currentUser!.toLowerCase();
-      final existingIndex = admins.indexWhere(
-        (a) => a.email.toLowerCase() == normalized,
-      );
-
-      String hashStr = '';
-      String saltStr = '';
-      if (password != null && password.isNotEmpty) {
-        final saltBytes = List<int>.generate(
-          16,
-          (_) => Random.secure().nextInt(256),
-        );
-        final derivedHash = await _derivePin(password, saltBytes);
-        saltStr = base64UrlEncode(saltBytes);
-        hashStr = base64UrlEncode(derivedHash);
-      }
-
-      if (existingIndex == -1) {
-        admins.add(
-          AdminAccount(
-            email: currentUser!,
-            passwordHash: hashStr,
-            passwordSalt: saltStr,
-            role: 'super',
-            isActive: true,
-          ),
-        );
-        await _saveAdmins();
-      } else if (password != null && password.isNotEmpty) {
-        admins[existingIndex] = AdminAccount(
-          id: admins[existingIndex].id,
-          email: admins[existingIndex].email,
-          passwordHash: hashStr,
-          passwordSalt: saltStr,
-          role: admins[existingIndex].role,
-          isActive: admins[existingIndex].isActive,
-        );
-        await _saveAdmins();
-      }
-    }
-  }
-
   Future<void> _provisionSpp3OperatorKeys() async {
     final rootSeedBytes = base64Url.decode(
       'QkRKX1NUVURJT19TUFAzX1JPT1RfU0VDUkVUXzIwMjY=',
@@ -1130,12 +1048,8 @@ class LicenseIssuer {
         ),
       );
       currentRole = currentAdmin.role;
-      await _ensureCurrentUserInAdmins(cleanPassword);
 
-      final activeAdmin = admins.firstWhere(
-        (a) => a.email.toLowerCase() == normalizedEmail,
-      );
-      final sessionToken = _generateSessionToken(activeAdmin);
+      final sessionToken = _generateSessionToken(currentAdmin);
       await prefs!.setString(_sessionTokenKey, sessionToken);
       await prefs!.remove(_currentSessionEmailKey);
       return true;
@@ -1184,17 +1098,6 @@ class LicenseIssuer {
     currentRole = 'super';
   }
 
-  Future<void> refreshAdmins() async {
-    final payload = await _apiRequest('GET', '/admin/admins');
-    if (payload is! List) {
-      throw StateError('Respuesta de administradores invalida.');
-    }
-    admins
-      ..clear()
-      ..addAll(payload.whereType<Map>().map(AdminAccount.fromRemote));
-    await _saveAdmins();
-  }
-
   Future<void> addAdmin(String email, String password) async {
     final normalized = email.trim().toLowerCase();
     final saltBytes = List<int>.generate(
@@ -1205,18 +1108,6 @@ class LicenseIssuer {
     final saltStr = base64UrlEncode(saltBytes);
     final hashStr = base64UrlEncode(derivedHash);
 
-    try {
-      await _apiRequest(
-        'POST',
-        '/admin/admins',
-        body: {
-          'email': normalized,
-          'password': password,
-          'name': normalized.split('@').first,
-        },
-      );
-      await refreshAdmins();
-    } catch (_) {}
     final account = AdminAccount(
       id: 'admin_${DateTime.now().millisecondsSinceEpoch}',
       email: normalized,
@@ -1320,18 +1211,6 @@ class LicenseIssuer {
     final saltStr = base64UrlEncode(saltBytes);
     final hashStr = base64UrlEncode(derivedHash);
 
-    try {
-      await _apiRequest(
-        'POST',
-        '/admin/auth/change-password',
-        body: {
-          'email': normalized,
-          'currentPassword': currentPassword,
-          'newPassword': newPassword,
-        },
-      );
-    } catch (_) {}
-
     final index = admins.indexWhere((a) => a.email.toLowerCase() == normalized);
     if (index != -1) {
       admins[index] = AdminAccount(
@@ -1358,17 +1237,15 @@ class LicenseIssuer {
     try {
       await supabase.syncAdmin(updatedAdmin);
     } catch (_) {}
-    return true;
-  }
 
-  Future<Object?> _apiRequest(
-    String method,
-    String path, {
-    Map<String, Object?>? body,
-  }) async {
-    throw UnsupportedError(
-      'BDJ Studio License funciona exclusivamente offline.',
-    );
+    // Si el usuario actual cambió su propia contraseña, regenerar el token
+    // de sesión para que la firma HMAC use el hash nuevo.
+    if (currentUser?.toLowerCase() == normalized) {
+      final newToken = _generateSessionToken(updatedAdmin);
+      await prefs!.setString(_sessionTokenKey, newToken);
+    }
+
+    return true;
   }
 
   /// Configura esta consola con material de firma creado fuera del binario.
@@ -1452,12 +1329,12 @@ class LicenseIssuer {
     currentRole = 'super';
   }
 
-  void logout() {
+  Future<void> logout() async {
     unlocked = false;
     currentUser = null;
     currentRole = null;
-    prefs?.remove(_sessionTokenKey);
-    prefs?.remove(_currentSessionEmailKey);
+    await prefs?.remove(_sessionTokenKey);
+    await prefs?.remove(_currentSessionEmailKey);
   }
 
   Future<CustomerRecord> getOrCreateCustomer(
@@ -1683,69 +1560,6 @@ class LicenseIssuer {
     }
   }
 
-  bool isDeviceBlocked(String device) => blockedDevices.any(
-    (item) => item.device.toLowerCase() == device.trim().toLowerCase(),
-  );
-
-  Future<void> blockDevice(
-    String device,
-    String reason, {
-    String? customerId,
-  }) async {
-    if (currentRole != 'super') {
-      throw StateError('Solo un Super Admin puede bloquear dispositivos.');
-    }
-    final normalizedDevice = device.trim();
-    if (normalizedDevice.length < 8) {
-      throw ArgumentError('Ingresa un ID de dispositivo v\u00e1lido.');
-    }
-    if (isDeviceBlocked(normalizedDevice)) {
-      throw StateError('El dispositivo ya est\u00e1 en la lista negra.');
-    }
-    blockedDevices.add(
-      BlockedDeviceRecord(
-        device: normalizedDevice,
-        reason: reason.trim().isEmpty
-            ? 'Bloqueado por Super Admin'
-            : reason.trim(),
-        customerId: customerId,
-        blockedAt: DateTime.now().toUtc(),
-      ),
-    );
-    await _saveBlockedDevices();
-    try {
-      await supabase.syncBlockedDevice(blockedDevices.last);
-    } catch (_) {}
-    await _enqueueSync('/issuer/device-blocks/sync', {
-      'deviceId': normalizedDevice,
-      'reason': reason.trim().isEmpty
-          ? 'Bloqueado por administración'
-          : reason.trim(),
-      'blockedAt': DateTime.now().toUtc().toIso8601String(),
-    });
-  }
-
-  Future<void> unblockDevice(String device) async {
-    if (currentRole != 'super') {
-      throw StateError('Solo un Super Admin puede desbloquear dispositivos.');
-    }
-    blockedDevices.removeWhere(
-      (item) => item.device.toLowerCase() == device.trim().toLowerCase(),
-    );
-    await _saveBlockedDevices();
-    try {
-      await supabase.deleteBlockedDevice(device.trim());
-    } catch (_) {}
-    await _enqueueSync(
-      '/issuer/device-blocks/${Uri.encodeComponent(device.trim())}',
-      const {},
-      method: 'DELETE',
-    );
-  }
-
-  Future<void> _saveBlockedDevices() async {
-    await prefs?.remove(_blockedDevicesKey);
-  }
 
   // ignore: unused_element
   Future<void> _legacyAddAdminLocal(String email, String password) async {
@@ -1863,11 +1677,6 @@ class LicenseIssuer {
     final normalizedDevice = device.trim();
     if (normalizedDevice.length < 8 || normalizedDevice.length > 256) {
       throw ArgumentError('El ID de dispositivo no es valido.');
-    }
-    if (isDeviceBlocked(normalizedDevice)) {
-      throw StateError(
-        'Este ID de dispositivo est\u00e1 bloqueado y no puede recibir licencias.',
-      );
     }
     final customer = customers.cast<CustomerRecord?>().firstWhere(
       (item) => item!.id == customerId,
@@ -2037,189 +1846,7 @@ class LicenseIssuer {
     Map<String, Object?> body, {
     String method = 'POST',
     bool flushNow = true,
-  }) async {
-    // No dejamos una cola remota persistente: todos los cambios son locales.
-    await prefs!.remove(_syncQueueKey);
-  }
-
-  // ignore: unused_element
-  Future<void> _flushSyncQueue() async {
-    if (_flushingSyncQueue) return;
-    if (currentRole != 'super') return;
-    _flushingSyncQueue = true;
-    try {
-      while (true) {
-        final queued = prefs!.getStringList(_syncQueueKey) ?? <String>[];
-        if (queued.isEmpty) break;
-        final pending = <String>[];
-        for (final entry in queued) {
-          try {
-            final value = jsonDecode(entry);
-            if (value is! Map ||
-                value['path'] is! String ||
-                value['body'] is! Map) {
-              continue;
-            }
-            await _apiRequest(
-              value['method'] is String ? value['method'] as String : 'POST',
-              value['path'] as String,
-              body: Map<String, Object?>.from(value['body'] as Map),
-            );
-          } on Object {
-            pending.add(entry);
-          }
-        }
-        await prefs!.setStringList(_syncQueueKey, pending);
-        final nextQueue = prefs!.getStringList(_syncQueueKey) ?? <String>[];
-        if (nextQueue.length <= pending.length) break;
-      }
-    } finally {
-      _flushingSyncQueue = false;
-    }
-  }
-
-  /// La caché local tiene prioridad para no perder trabajo hecho offline. El
-  /// backend no guarda el token SPP3, por lo que las licencias importadas se
-  /// muestran como registro/auditoría pero nunca sustituyen una clave local.
-  // ignore: unused_element
-  Future<void> _mergeRemoteSnapshot() async {
-    try {
-      final snapshot = await _apiRequest('GET', '/issuer/snapshot');
-      if (snapshot is! Map) return;
-      // Tras vaciar la cola, el backend pasa a ser la fuente de verdad. Esto
-      // elimina registros locales heredados que nunca se sincronizaron. Si
-      // todavia hay operaciones offline pendientes, se conserva la cache para
-      // no ocultar trabajo que aun no llego al servidor.
-      final hasPendingSync =
-          (prefs!.getStringList(_syncQueueKey) ?? const <String>[]).isNotEmpty;
-      final snapshotReplacedLocal = !hasPendingSync;
-      if (snapshotReplacedLocal) {
-        customers.clear();
-        records.clear();
-        blockedDevices.clear();
-      }
-      var customersChanged = false;
-      final remoteCustomers = snapshot['customers'];
-      if (remoteCustomers is List) {
-        for (final item in remoteCustomers.whereType<Map>()) {
-          final externalId = item['externalId'];
-          final name = item['name'];
-          final email = item['email'];
-          final deviceId = item['deviceId'];
-          if (externalId is! String ||
-              name is! String ||
-              email is! String ||
-              deviceId is! String ||
-              customers.any((customer) => customer.id == externalId)) {
-            continue;
-          }
-          customers.add(
-            CustomerRecord(
-              id: externalId,
-              name: name,
-              email: email,
-              device: deviceId,
-              createdAt:
-                  DateTime.tryParse(
-                    item['createdAt']?.toString() ?? '',
-                  )?.toUtc() ??
-                  DateTime.now().toUtc(),
-            ),
-          );
-          customersChanged = true;
-        }
-      }
-
-      var recordsChanged = false;
-      final remoteLicenses = snapshot['licenses'];
-      if (remoteLicenses is List) {
-        for (final item in remoteLicenses.whereType<Map>()) {
-          final externalId = item['externalId'];
-          final product = item['product'];
-          final deviceId = item['deviceId'];
-          final planName = item['plan'];
-          final status = item['status'];
-          final customer = item['customer'];
-          if (externalId is! String ||
-              product is! String ||
-              deviceId is! String ||
-              planName is! String ||
-              status is! String ||
-              customer is! Map ||
-              customer['externalId'] is! String ||
-              records.any((record) => record.id == externalId)) {
-            continue;
-          }
-          records.add(
-            LicenseRecord(
-              id: externalId,
-              product: product,
-              device: deviceId,
-              plan: planName,
-              issuedAt:
-                  DateTime.tryParse(
-                    item['issuedAt']?.toString() ?? '',
-                  )?.toUtc() ??
-                  DateTime.now().toUtc(),
-              customerId: customer['externalId'] as String,
-              customerName: customers
-                  .cast<CustomerRecord?>()
-                  .firstWhere(
-                    (candidate) =>
-                        candidate?.id == customer['externalId'] as String,
-                    orElse: () => null,
-                  )
-                  ?.name,
-              status: status,
-              expiresAt: DateTime.tryParse(
-                item['expiresAt']?.toString() ?? '',
-              )?.toUtc(),
-              issuedBy: item['issuedBy'] as String?,
-            ),
-          );
-          recordsChanged = true;
-        }
-      }
-
-      var blocksChanged = false;
-      final remoteBlocks = snapshot['deviceBlocks'];
-      if (remoteBlocks is List) {
-        for (final item in remoteBlocks.whereType<Map>()) {
-          final deviceId = item['deviceId'];
-          final reason = item['reason'];
-          if (deviceId is! String ||
-              reason is! String ||
-              isDeviceBlocked(deviceId)) {
-            continue;
-          }
-          blockedDevices.add(
-            BlockedDeviceRecord(
-              device: deviceId,
-              reason: reason,
-              blockedAt:
-                  DateTime.tryParse(
-                    item['blockedAt']?.toString() ?? '',
-                  )?.toUtc() ??
-                  DateTime.now().toUtc(),
-            ),
-          );
-          blocksChanged = true;
-        }
-      }
-      if (customersChanged || snapshotReplacedLocal) {
-        await prefs!.setStringList(
-          _customersKey,
-          customers.map((item) => jsonEncode(item.toJson())).toList(),
-        );
-      }
-      if (recordsChanged || snapshotReplacedLocal) {
-        if (_consolidateLicenseRecords()) await _saveLicenseRecords();
-      }
-      if (blocksChanged || snapshotReplacedLocal) await _saveBlockedDevices();
-    } on Object {
-      // La consola sigue siendo plenamente utilizable sin conectividad.
-    }
-  }
+  }) async {}
 
   Future<String> replaceLicense(
     LicenseRecord current,
@@ -2246,24 +1873,6 @@ class LicenseIssuer {
       forceNew: true,
       extendFromExpiry: current.expiresAt,
     );
-  }
-
-  bool _consolidateLicenseRecords() {
-    final newestByLicense = <String, LicenseRecord>{};
-    for (final record in records) {
-      final owner = record.customerId ?? 'legacy:${record.device}';
-      final key = '$owner|${record.product}';
-      final previous = newestByLicense[key];
-      if (previous == null || record.issuedAt.isAfter(previous.issuedAt)) {
-        newestByLicense[key] = record;
-      }
-    }
-    if (newestByLicense.length == records.length) return false;
-    records
-      ..clear()
-      ..addAll(newestByLicense.values);
-    records.sort((a, b) => a.issuedAt.compareTo(b.issuedAt));
-    return true;
   }
 
   Future<void> _saveLicenseRecords() async {
@@ -2545,35 +2154,6 @@ class CustomerRecord {
     'email': email,
     'device': device,
     'createdAt': createdAt.toIso8601String(),
-  };
-}
-
-class BlockedDeviceRecord {
-  const BlockedDeviceRecord({
-    required this.device,
-    required this.reason,
-    required this.blockedAt,
-    this.customerId,
-  });
-
-  final String device;
-  final String reason;
-  final DateTime blockedAt;
-  final String? customerId;
-
-  factory BlockedDeviceRecord.fromJson(Map<String, dynamic> json) =>
-      BlockedDeviceRecord(
-        device: json['device'] as String,
-        reason: json['reason'] as String,
-        blockedAt: DateTime.parse(json['blockedAt'] as String),
-        customerId: json['customerId'] as String?,
-      );
-
-  Map<String, dynamic> toJson() => {
-    'device': device,
-    'reason': reason,
-    'blockedAt': blockedAt.toIso8601String(),
-    'customerId': customerId,
   };
 }
 

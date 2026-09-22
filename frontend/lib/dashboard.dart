@@ -146,12 +146,12 @@ extension _LicenseDashboardView on _LicenseHomeState {
             child: Icon(CupertinoIcons.person_fill, size: 18),
           ),
           title: Text(
-            (widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com'
+            widget.issuer.currentRole == 'super'
                 ? 'Super Admin'
                 : 'Administrador',
           ),
           subtitle: Text(
-            (widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com'
+            widget.issuer.currentRole == 'super'
                 ? 'Acceso total'
                 : 'Acceso al panel',
           ),
@@ -367,301 +367,6 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     ),
                     IconButton(
                       tooltip: 'Página siguiente',
-                      onPressed: safePage >= pageCount - 1
-                          ? null
-                          : () => updateDashboard(
-                              () => customerPage = safePage + 1,
-                            ),
-                      icon: const Icon(CupertinoIcons.chevron_right),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// Implementación anterior conservada temporalmente como referencia del
-  /// diseño. La gestión activa se concentra en el modal de clientes.
-  // ignore: unused_element
-  Widget _legacyManagementPage() {
-    const pageSize = 8;
-    final query = customerSearch.text.trim().toLowerCase();
-    final filtered = widget.issuer.customers.reversed.where((customer) {
-      if (query.isEmpty) return true;
-      return customer.name.toLowerCase().contains(query) ||
-          customer.email.toLowerCase().contains(query) ||
-          customer.device.toLowerCase().contains(query);
-    }).toList();
-    final pageCount = max(1, (filtered.length + pageSize - 1) ~/ pageSize);
-    final safePage = customerPage < 0
-        ? 0
-        : customerPage >= pageCount
-        ? pageCount - 1
-        : customerPage;
-    final start = safePage * pageSize;
-    final visible = filtered.skip(start).take(pageSize).toList();
-
-    return _dashboardPage(
-      title: 'Gesti\u00f3n',
-      subtitle: 'Clientes, licencias y bloqueos reunidos en un solo lugar.',
-      children: [
-        _dashboardPanel(
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final narrow = constraints.maxWidth < 420;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Emitir licencias por ID de dispositivo',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 14,
-                    runSpacing: 14,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: narrow ? constraints.maxWidth : 320.0,
-                        child: TextField(
-                          controller: deviceId,
-                          minLines: 1,
-                          maxLines: 3,
-                          maxLength: 4096,
-                          buildCounter:
-                              (
-                                context, {
-                                required currentLength,
-                                required isFocused,
-                                maxLength,
-                              }) => null,
-                          decoration: const InputDecoration(
-                            labelText: 'ID del dispositivo (ej. HWID)',
-                            prefixIcon: Icon(CupertinoIcons.device_laptop),
-                            helperText:
-                                'Puedes pegar varios ID, uno por línea.',
-                          ),
-                        ),
-                      ),
-                      SizedBox(
-                        width: narrow ? constraints.maxWidth : 260,
-                        child: FormField<Set<String>>(
-                          initialValue: selectedProducts,
-                          builder: (formState) {
-                            final labels = _productLabels;
-                            final display = selectedProducts.isEmpty
-                                ? 'Seleccionar producto(s)'
-                                : selectedProducts
-                                      .map((p) => labels[p] ?? p)
-                                      .join(', ');
-                            return InkWell(
-                              borderRadius: BorderRadius.circular(14),
-                              onTap: () async {
-                                final temp = Set<String>.from(selectedProducts);
-                                await showDialog(
-                                  context: context,
-                                  builder: (ctx) => StatefulBuilder(
-                                    builder: (c, setDState) => AlertDialog(
-                                      title: const Text(
-                                        'Seleccionar Producto(s)',
-                                      ),
-                                      content: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: labels.entries.map((entry) {
-                                          final checked = temp.contains(
-                                            entry.key,
-                                          );
-                                          return CheckboxListTile(
-                                            title: Text(entry.value),
-                                            value: checked,
-                                            activeColor: const Color(
-                                              0xFF00E5FF,
-                                            ),
-                                            onChanged: (val) {
-                                              setDState(() {
-                                                if (val == true) {
-                                                  temp.add(entry.key);
-                                                } else if (temp.length > 1) {
-                                                  temp.remove(entry.key);
-                                                }
-                                              });
-                                            },
-                                          );
-                                        }).toList(),
-                                      ),
-                                      actions: [
-                                        FilledButton(
-                                          onPressed: () => Navigator.pop(ctx),
-                                          child: const Text('Aceptar'),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                                updateDashboard(() => selectedProducts = temp);
-                              },
-                              child: InputDecorator(
-                                decoration: const InputDecoration(
-                                  labelText: 'Producto(s) a licenciar',
-                                  prefixIcon: Icon(
-                                    CupertinoIcons.square_stack_3d_up,
-                                  ),
-                                ),
-                                child: Text(
-                                  display,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                      SizedBox(
-                        width: narrow ? constraints.maxWidth : 170,
-                        child: DropdownButtonFormField<LicensePlan>(
-                          initialValue: plan,
-                          decoration: const InputDecoration(
-                            labelText: 'Duración',
-                          ),
-                          items: LicensePlan.values
-                              .map(
-                                (item) => DropdownMenuItem(
-                                  value: item,
-                                  child: Text(item.label),
-                                ),
-                              )
-                              .toList(),
-                          onChanged: (v) => updateDashboard(() => plan = v!),
-                        ),
-                      ),
-                      if (plan == LicensePlan.custom) ...[
-                        SizedBox(
-                          width: narrow ? (constraints.maxWidth - 20) / 3 : 85,
-                          child: TextField(
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Años',
-                            ),
-                            onChanged: (t) => updateDashboard(
-                              () => customYears = int.tryParse(t) ?? 0,
-                            ),
-                          ),
-                        ),
-                        SizedBox(
-                          width: narrow ? (constraints.maxWidth - 20) / 3 : 85,
-                          child: TextField(
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Meses',
-                            ),
-                            onChanged: (t) => updateDashboard(
-                              () => customMonths = int.tryParse(t) ?? 0,
-                            ),
-                          ),
-                        ),
-                        SizedBox(
-                          width: narrow ? (constraints.maxWidth - 20) / 3 : 85,
-                          child: TextField(
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Días',
-                            ),
-                            onChanged: (t) => updateDashboard(
-                              () => customDaysInput = int.tryParse(t) ?? 0,
-                            ),
-                          ),
-                        ),
-                      ],
-                      SizedBox(
-                        height: 56,
-                        child: FilledButton.icon(
-                          onPressed: _createCustomerAndIssueLicenses,
-                          icon: const Icon(CupertinoIcons.add),
-                          label: const Text('Crear / Emitir'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              );
-            },
-          ),
-        ),
-        const SizedBox(height: 18),
-        _dashboardPanel(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Wrap(
-                spacing: 14,
-                runSpacing: 12,
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  Text(
-                    'Clientes y licencias (${filtered.length})',
-                    style: const TextStyle(
-                      fontSize: 19,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  LayoutBuilder(
-                    builder: (context, constraints) => SizedBox(
-                      width: constraints.maxWidth < 360
-                          ? constraints.maxWidth
-                          : 320,
-                      child: TextField(
-                        controller: customerSearch,
-                        onChanged: (_) =>
-                            updateDashboard(() => customerPage = 0),
-                        decoration: const InputDecoration(
-                          hintText: 'Buscar cliente, correo o dispositivo',
-                          prefixIcon: Icon(CupertinoIcons.search),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              if (visible.isEmpty)
-                const _DashboardEmpty(
-                  icon: CupertinoIcons.person_2,
-                  message: 'No hay clientes para mostrar.',
-                )
-              else
-                ...visible.map(_managementCustomerCard),
-              if (filtered.isNotEmpty) ...[
-                const Divider(height: 28),
-                Wrap(
-                  alignment: WrapAlignment.end,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      'P\u00e1gina ${safePage + 1} de $pageCount',
-                      style: const TextStyle(color: Colors.white60),
-                    ),
-                    const SizedBox(width: 12),
-                    IconButton(
-                      tooltip: 'P\u00e1gina anterior',
-                      onPressed: safePage == 0
-                          ? null
-                          : () => updateDashboard(
-                              () => customerPage = safePage - 1,
-                            ),
-                      icon: const Icon(CupertinoIcons.chevron_left),
-                    ),
-                    IconButton(
-                      tooltip: 'P\u00e1gina siguiente',
                       onPressed: safePage >= pageCount - 1
                           ? null
                           : () => updateDashboard(
@@ -999,7 +704,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
             final effectiveEmail = email.trim().contains('@')
                 ? email.trim()
                 : 'device_${_shortDeviceId(draft.device.text.trim())}@bdjstudio.local';
-            CustomerRecord saved;
+            CustomerRecord? saved;
             if (draft.existing != null) {
               await widget.issuer.updateCustomer(
                 draft.existing!.id,
@@ -1007,9 +712,14 @@ extension _LicenseDashboardView on _LicenseHomeState {
                 email: effectiveEmail,
                 device: draft.device.text,
               );
-              saved = widget.issuer.customers.firstWhere(
-                (item) => item.id == draft.existing!.id,
+              saved = widget.issuer.customers.cast<CustomerRecord?>().firstWhere(
+                (item) => item!.id == draft.existing!.id,
+                orElse: () => null,
               );
+              if (saved == null) {
+                updateDashboard(() => error = 'Cliente no encontrado después de actualizar.');
+                return;
+              }
             } else {
               saved = await widget.issuer.getOrCreateCustomer(
                 effectiveName,
@@ -1018,10 +728,11 @@ extension _LicenseDashboardView on _LicenseHomeState {
                 flushSync: false,
               );
             }
+            final customer = saved;
             if (draft.existing != null) {
               await widget.issuer.setProductAccess(
-                customerId: saved.id,
-                device: saved.device,
+                customerId: customer.id,
+                device: customer.device,
                 products: draft.products,
                 flushSync: pending == 0,
               );
@@ -1053,85 +764,12 @@ extension _LicenseDashboardView on _LicenseHomeState {
     );
   }
 
-  Future<void> _createCustomerAndIssueLicenses() async {
-    await runWithLoading(
-      message: 'Procesando cliente y generando licencias...',
-      action: () async {
-        try {
-          if (selectedProducts.isEmpty) {
-            throw ArgumentError('Selecciona al menos un producto.');
-          }
-          final devices = deviceId.text
-              .split(RegExp(r'[\r\n,;]+'))
-              .map((id) => id.trim())
-              .where((id) => id.isNotEmpty)
-              .toSet()
-              .toList();
-          if (devices.isEmpty) {
-            throw ArgumentError('Ingresa al menos un ID de activación.');
-          }
-
-          final generated = <String, String>{};
-          final totalCustomDays =
-              (customYears * 365) + (customMonths * 30) + customDaysInput;
-          if (plan == LicensePlan.custom && totalCustomDays <= 0) {
-            throw ArgumentError(
-              'Indica una duración personalizada válida (Años, Meses o Días mayor a 0).',
-            );
-          }
-
-          var pendingIssues = devices.length * selectedProducts.length;
-          for (final device in devices) {
-            final cust = await widget.issuer.getOrCreateCustomer(
-              customerName.text.trim(),
-              customerEmail.text.trim(),
-              device,
-              flushSync: false,
-            );
-            for (final product in selectedProducts) {
-              pendingIssues--;
-              final token = await widget.issuer.issue(
-                product,
-                cust.device,
-                plan,
-                customerId: cust.id,
-                customDays: plan == LicensePlan.custom ? totalCustomDays : null,
-                flushSync: pendingIssues == 0,
-              );
-              final productLabel = _productLabels[product] ?? product;
-              final deviceSuffix = devices.length > 1
-                  ? ' · ${_shortDeviceId(cust.device)}'
-                  : '';
-              generated['$productLabel$deviceSuffix'] = token;
-            }
-          }
-
-          customerName.clear();
-          customerEmail.clear();
-          deviceId.clear();
-          updateDashboard(() => error = null);
-
-          if (mounted) {
-            await _showGeneratedCodesDialog(generated);
-          }
-        } catch (exception) {
-          updateDashboard(() => error = exception.toString());
-        }
-      },
-    );
-  }
-
   Widget _managementCustomerCard(CustomerRecord customer) {
     final activeLicenses = _allActiveLicensesFor(customer);
-    final blocked = widget.issuer.isDeviceBlocked(customer.device);
-    final statusColor = blocked
-        ? Colors.redAccent
-        : activeLicenses.isEmpty
+    final statusColor = activeLicenses.isEmpty
         ? Colors.orangeAccent
         : const Color(0xFF30D158);
-    final statusText = blocked
-        ? 'Bloqueado'
-        : activeLicenses.isEmpty
+    final statusText = activeLicenses.isEmpty
         ? 'Sin licencias'
         : '${activeLicenses.length} Licencia${activeLicenses.length > 1 ? "s" : ""} activa${activeLicenses.length > 1 ? "s" : ""}';
 
@@ -1489,16 +1127,22 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                       ),
                                     );
                                     if (confirm == true) {
-                                      await widget.issuer.deleteLicense(lic.id);
-                                      if (mounted) {
-                                        updateDashboard(() {});
-                                        ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
-                                            content: Text('Licencia de ${lic.productLabel} eliminada.'),
-                                            duration: const Duration(seconds: 2),
-                                            behavior: SnackBarBehavior.floating,
-                                          ),
-                                        );
+                                      try {
+                                        await widget.issuer.deleteLicense(lic.id);
+                                        if (mounted) {
+                                          updateDashboard(() {});
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text('Licencia de ${lic.productLabel} eliminada.'),
+                                              duration: const Duration(seconds: 2),
+                                              behavior: SnackBarBehavior.floating,
+                                            ),
+                                          );
+                                        }
+                                      } catch (e) {
+                                        if (mounted) {
+                                          updateDashboard(() => error = e.toString());
+                                        }
                                       }
                                     }
                                   },
@@ -1561,27 +1205,17 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   title: Text('Gestionar cliente y licencias'),
                 ),
               ),
-              PopupMenuItem(
-                value: blocked ? 'unblock' : 'block',
-                child: ListTile(
-                  leading: Icon(
-                    blocked
-                        ? CupertinoIcons.lock_open_fill
-                        : CupertinoIcons.nosign,
+              if (widget.issuer.currentRole == 'super')
+                const PopupMenuItem(
+                  value: 'deleteCustomer',
+                  child: ListTile(
+                    leading: Icon(
+                      CupertinoIcons.delete_solid,
+                      color: Colors.redAccent,
+                    ),
+                    title: Text('Eliminar cliente'),
                   ),
-                  title: Text(blocked ? 'Desbloquear' : 'Lista negra'),
                 ),
-              ),
-              const PopupMenuItem(
-                value: 'deleteCustomer',
-                child: ListTile(
-                  leading: Icon(
-                    CupertinoIcons.delete_solid,
-                    color: Colors.redAccent,
-                  ),
-                  title: Text('Eliminar cliente'),
-                ),
-              ),
             ],
           ),
         ],
@@ -1628,201 +1262,6 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   deviceIds.contains(license.device.toLowerCase())),
         )
         .toList();
-  }
-
-  // ignore: unused_element
-  Future<void> _issueOrReplaceLicense(
-    CustomerRecord customer,
-    LicenseRecord? current,
-  ) async {
-    var selectedProduct = current?.product ?? selectedProducts.first;
-    var selectedPlan = current == null
-        ? plan
-        : LicensePlan.values.firstWhere(
-            (item) => item.name == current.plan,
-            orElse: () => LicensePlan.year,
-          );
-    var customYears = 0;
-    var customMonths = 0;
-    var customDaysInput = 0;
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: Text(
-            current == null
-                ? 'Emitir licencia para ${customer.name}'
-                : 'Editar / Renovar licencia de ${customer.name}',
-          ),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<String>(
-                  initialValue: selectedProduct,
-                  decoration: const InputDecoration(labelText: 'Producto'),
-                  items: const [
-                    DropdownMenuItem(
-                      value: 'bdj_studio_sample_pad',
-                      child: Text('BDJ Studio Sample Pad'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'bdj_studio_synth_pro',
-                      child: Text('BDJ Studio Synth Pro'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'bdj_studio_stems_music',
-                      child: Text('BDJ Studio Stems Music'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'bdj_studio_wave_video',
-                      child: Text('BDJ Studio Wave Video'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'bdj_studio_voice_spot',
-                      child: Text('BDJ Studio Voice Spot'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'bdj_studio_search_pro',
-                      child: Text('BDJ Studio Search Pro'),
-                    ),
-                    DropdownMenuItem(
-                      value: 'bdj_studio_audio_analyzer',
-                      child: Text('BDJ Studio Audio Analyzer'),
-                    ),
-                  ],
-                  onChanged: (value) =>
-                      setDialogState(() => selectedProduct = value!),
-                ),
-                const SizedBox(height: 14),
-                DropdownButtonFormField<LicensePlan>(
-                  initialValue: selectedPlan,
-                  decoration: const InputDecoration(labelText: 'Duraci\u00f3n'),
-                  items: LicensePlan.values
-                      .map(
-                        (item) => DropdownMenuItem(
-                          value: item,
-                          child: Text(item.label),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) =>
-                      setDialogState(() => selectedPlan = value!),
-                ),
-                if (selectedPlan == LicensePlan.custom) ...[
-                  const SizedBox(height: 14),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(labelText: 'Anos'),
-                          onChanged: (t) => setDialogState(
-                            () => customYears = int.tryParse(t) ?? 0,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(labelText: 'Meses'),
-                          onChanged: (t) => setDialogState(
-                            () => customMonths = int.tryParse(t) ?? 0,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: TextField(
-                          keyboardType: TextInputType.number,
-                          decoration: const InputDecoration(labelText: 'Dias'),
-                          onChanged: (t) => setDialogState(
-                            () => customDaysInput = int.tryParse(t) ?? 0,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Total: ${customYears * 365 + customMonths * 30 + customDaysInput} dias',
-                      style: const TextStyle(color: Colors.white60),
-                    ),
-                  ),
-                ],
-                if (current != null) ...[
-                  const SizedBox(height: 14),
-                  Text(
-                    current.expiresAt == null
-                        ? 'Licencia actual: Permanente (única para este dispositivo).'
-                        : 'Licencia actual vence: ${_dashboardDate(current.expiresAt!)}. '
-                              'Al renovar se le SUMARÁN los días nuevos al tiempo restante.',
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Se generará un código nuevo con la nueva fecha de vencimiento; la licencia anterior quedará reemplazada.',
-                    style: TextStyle(color: Colors.white60, fontSize: 12),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancelar'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: Text(
-                current == null ? 'Generar' : 'Renovar y generar código',
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (accepted != true) return;
-    await runWithLoading(
-      message: current == null
-          ? 'Emitiendo licencia...'
-          : 'Renovando licencia en el servidor...',
-      action: () async {
-        try {
-          final customDuration = selectedPlan == LicensePlan.custom
-              ? customYears * 365 + customMonths * 30 + customDaysInput
-              : null;
-          final token = current == null
-              ? await widget.issuer.issue(
-                  selectedProduct,
-                  customer.device,
-                  selectedPlan,
-                  customerId: customer.id,
-                  customDays: customDuration,
-                )
-              : await widget.issuer.replaceLicense(
-                  current,
-                  selectedPlan,
-                  customDays: customDuration,
-                );
-          selectedProducts = {selectedProduct};
-          plan = selectedPlan;
-          error = null;
-          updateDashboard(() {});
-          if (mounted) {
-            final label = _productLabels[selectedProduct] ?? selectedProduct;
-            await _showGeneratedCodesDialog({label: token});
-          }
-        } on Object catch (exception) {
-          updateDashboard(() => error = exception.toString());
-        }
-      },
-    );
   }
 
   Future<void> _showGeneratedCodesDialog(Map<String, String> tokens) async {
@@ -1898,7 +1337,6 @@ extension _LicenseDashboardView on _LicenseHomeState {
                             fontSize: 11,
                           ),
                         ),
-                        const SizedBox(height: 6),
                         const SizedBox(height: 6),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
@@ -2147,12 +1585,10 @@ extension _LicenseDashboardView on _LicenseHomeState {
         'stats': {
           'customers_count': widget.issuer.customers.length,
           'licenses_count': widget.issuer.records.length,
-          'blocked_devices_count': widget.issuer.blockedDevices.length,
           'admins_count': widget.issuer.admins.length,
         },
         'customers': widget.issuer.customers.map((c) => c.toJson()).toList(),
         'licenses': widget.issuer.records.map((l) => l.toJson()).toList(),
-        'blocked_devices': widget.issuer.blockedDevices.map((b) => b.toJson()).toList(),
       };
 
       final jsonContent = const JsonEncoder.withIndent('  ').convert(backupData);
@@ -2232,9 +1668,14 @@ extension _LicenseDashboardView on _LicenseHomeState {
     }
 
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final expiryDay = DateTime(
+      lic.expiresAt!.year,
+      lic.expiresAt!.month,
+      lic.expiresAt!.day,
+    );
     final isExpired = lic.expiresAt!.isBefore(now);
-    final diff = lic.expiresAt!.difference(now);
-    final daysLeft = diff.inDays;
+    final daysLeft = expiryDay.difference(today).inDays;
 
     if (isExpired) {
       return Container(
@@ -2433,7 +1874,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
               return activeList;
             })().map((admin) {
               final isCurrent = admin.email.toLowerCase() == (widget.issuer.currentUser ?? '').toLowerCase();
-              final isMasterAdmin = admin.email.toLowerCase() == 'david.zapata@bdjstudio.com';
+              final isMasterAdmin = admin.role == 'super';
               final leading = CircleAvatar(
                 backgroundColor: isMasterAdmin ? const Color(0xFF00E5FF).withValues(alpha: 0.15) : null,
                 child: Icon(
@@ -2490,7 +1931,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _roleBadge(admin.email),
+                          _roleBadge(admin.role),
                           const SizedBox(width: 8),
                           ...actions,
                         ],
@@ -2511,12 +1952,12 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   title,
-                                  if (subtitle != null) subtitle,
+                                  ?subtitle,
                                 ],
                               ),
                             ),
                             const SizedBox(width: 8),
-                            _roleBadge(admin.email),
+                            _roleBadge(admin.role),
                           ],
                         ),
                         Wrap(children: actions),
@@ -2533,10 +1974,10 @@ extension _LicenseDashboardView on _LicenseHomeState {
   );
 
   Future<void> _deleteAdmin(AdminAccount admin) async {
-    if (admin.email.trim().toLowerCase() == 'david.zapata@bdjstudio.com') {
+    if (admin.role == 'super' || admin.email.trim().toLowerCase() == 'david.zapata@bdjstudio.com') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('La cuenta de david.zapata@bdjstudio.com es el creador principal y no puede ser eliminada.'),
+          content: Text('Las cuentas de Super Admin no pueden ser eliminadas.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -2766,7 +2207,6 @@ extension _LicenseDashboardView on _LicenseHomeState {
     CustomerRecord customer,
     List<LicenseRecord> activeLicenses,
   ) async {
-    final license = activeLicenses.isEmpty ? null : activeLicenses.first;
     switch (action) {
       case 'viewKeys':
         final tokens = <String, String>{};
@@ -2781,47 +2221,11 @@ extension _LicenseDashboardView on _LicenseHomeState {
       case 'manage':
         await _showCustomerLicenseModal(customer: customer);
         return;
-      case 'copy':
-        if (license == null) return;
-        final token = await widget.issuer.generateSpp3TokenForRecord(license);
-        Clipboard.setData(ClipboardData(text: token));
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Código de licencia SPP3 copiado al portapapeles.'),
-            duration: Duration(seconds: 2),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-        return;
-      case 'block':
-        await _blockCustomerFromManagement(customer);
-        return;
-      case 'unblock':
-        final confirmed = await _confirmAction(
-          title: 'Desbloquear dispositivo',
-          message: '${customer.device} podr\u00e1 recibir nuevas licencias.',
-          confirmLabel: 'Desbloquear',
-        );
-        if (!confirmed) return;
-        await runWithLoading(
-          message: 'Desbloqueando dispositivo...',
-          action: () async {
-            try {
-              await widget.issuer.unblockDevice(customer.device);
-              updateDashboard(() => error = null);
-            } on Object catch (exception) {
-              updateDashboard(() => error = exception.toString());
-            }
-          },
-        );
-        return;
       case 'deleteCustomer':
         final confirmed = await _confirmAction(
           title: 'Eliminar cliente',
           message:
-              'Se eliminar\u00e1 a ${customer.name}. El historial de licencias se conservar\u00e1.',
+              'Se eliminar\u00e1 a ${customer.name} y todas sus licencias asociadas. Esta acci\u00f3n no se puede deshacer.',
           confirmLabel: 'Eliminar',
         );
         if (!confirmed) return;
@@ -2838,47 +2242,6 @@ extension _LicenseDashboardView on _LicenseHomeState {
         );
         return;
     }
-  }
-
-  Future<void> _blockCustomerFromManagement(CustomerRecord customer) async {
-    blockReason.text = '';
-    final accepted = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Enviar a lista negra'),
-        content: TextField(
-          controller: blockReason,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Motivo del bloqueo'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Bloquear'),
-          ),
-        ],
-      ),
-    );
-    if (accepted != true) return;
-    await runWithLoading(
-      message: 'Bloqueando dispositivo...',
-      action: () async {
-        try {
-          await widget.issuer.blockDevice(
-            customer.device,
-            blockReason.text,
-            customerId: customer.id,
-          );
-          updateDashboard(() => error = null);
-        } catch (exception) {
-          updateDashboard(() => error = exception.toString());
-        }
-      },
-    );
   }
 
   // ignore: unused_element
@@ -2949,8 +2312,8 @@ extension _LicenseDashboardView on _LicenseHomeState {
     device.dispose();
   }
 
-  Widget _roleBadge([String? email]) {
-    final isMaster = (email ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
+  Widget _roleBadge([String? role]) {
+    final isMaster = role == 'super';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
       decoration: BoxDecoration(
