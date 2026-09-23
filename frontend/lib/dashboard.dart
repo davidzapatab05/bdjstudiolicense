@@ -1873,23 +1873,27 @@ extension _LicenseDashboardView on _LicenseHomeState {
               }
               return activeList;
             })().map((admin) {
-              final isCurrent = admin.email.toLowerCase() == (widget.issuer.currentUser ?? '').toLowerCase();
-              final isMasterAdmin = admin.role == 'super';
+              final adminEmail = admin.email.trim().toLowerCase();
+              final currentEmail = (widget.issuer.currentUser ?? '').trim().toLowerCase();
+              final isCurrent = adminEmail == currentEmail;
+              final isCreatorAdmin = adminEmail == 'david.zapata@bdjstudio.com';
+              final isLoggedUserCreator = currentEmail == 'david.zapata@bdjstudio.com';
+
               final leading = CircleAvatar(
-                backgroundColor: isMasterAdmin ? const Color(0xFF00E5FF).withValues(alpha: 0.15) : null,
+                backgroundColor: isCreatorAdmin ? const Color(0xFF00E5FF).withValues(alpha: 0.15) : null,
                 child: Icon(
-                  isMasterAdmin ? CupertinoIcons.shield_fill : CupertinoIcons.person_fill,
-                  color: isMasterAdmin ? const Color(0xFF00E5FF) : null,
+                  isCreatorAdmin ? CupertinoIcons.shield_fill : CupertinoIcons.person_fill,
+                  color: isCreatorAdmin ? const Color(0xFF00E5FF) : null,
                 ),
               );
               final title = Text(
                 admin.email,
                 style: TextStyle(
                   fontWeight: FontWeight.w600,
-                  color: isMasterAdmin ? const Color(0xFF00E5FF) : null,
+                  color: isCreatorAdmin ? const Color(0xFF00E5FF) : null,
                 ),
               );
-              final subtitle = isMasterAdmin
+              final subtitle = isCreatorAdmin
                   ? const Text(
                       'Creador & Super Admin Principal (Protegido)',
                       style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
@@ -1901,16 +1905,20 @@ extension _LicenseDashboardView on _LicenseHomeState {
                         )
                       : null);
               final actions = <Widget>[
-                if (isCurrent)
+                // El creador puede cambiar la contraseña de todos; cada usuario puede cambiar la suya propia
+                if (isCurrent || isLoggedUserCreator)
                   TextButton.icon(
                     onPressed: () => _showChangePasswordDialog(admin),
                     icon: const Icon(CupertinoIcons.lock_shield, size: 16),
-                    label: const Text('Cambiar contraseña'),
+                    label: Text(isCurrent ? 'Cambiar contraseña' : 'Restablecer contraseña'),
                     style: TextButton.styleFrom(
                       foregroundColor: const Color(0xFF5E5CE6),
                     ),
-                  )
-                else if (!isMasterAdmin)
+                  ),
+                // Solo se puede eliminar si NO es el creador ni la sesión actual, y si el usuario logueado es Creador o Super Admin
+                if (!isCreatorAdmin &&
+                    !isCurrent &&
+                    (isLoggedUserCreator || widget.issuer.currentRole == 'super'))
                   IconButton(
                     tooltip: 'Eliminar Administrador',
                     icon: const Icon(
@@ -1974,10 +1982,10 @@ extension _LicenseDashboardView on _LicenseHomeState {
   );
 
   Future<void> _deleteAdmin(AdminAccount admin) async {
-    if (admin.role == 'super' || admin.email.trim().toLowerCase() == 'david.zapata@bdjstudio.com') {
+    if (admin.email.trim().toLowerCase() == 'david.zapata@bdjstudio.com') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Las cuentas de Super Admin no pueden ser eliminadas.'),
+          content: Text('La cuenta del Creador y Super Admin Principal no puede ser eliminada.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -1985,13 +1993,13 @@ extension _LicenseDashboardView on _LicenseHomeState {
     }
     final adminId = admin.id ?? admin.email;
     final confirmed = await _confirmAction(
-      title: 'Eliminar Super Admin',
+      title: 'Eliminar Administrador',
       message: '${admin.email} perder\u00e1 el acceso a esta aplicaci\u00f3n.',
       confirmLabel: 'Eliminar',
     );
     if (!confirmed) return;
     await runWithLoading(
-      message: 'Eliminando Super Admin...',
+      message: 'Eliminando Administrador...',
       action: () async {
         try {
           await widget.issuer.deleteAdmin(adminId);
@@ -2004,6 +2012,9 @@ extension _LicenseDashboardView on _LicenseHomeState {
   }
 
   Future<void> _showChangePasswordDialog(AdminAccount admin) async {
+    final isSelf = admin.email.trim().toLowerCase() ==
+        (widget.issuer.currentUser ?? '').trim().toLowerCase();
+
     final currentController = TextEditingController();
     final newController = TextEditingController();
     final confirmController = TextEditingController();
@@ -2029,7 +2040,9 @@ extension _LicenseDashboardView on _LicenseHomeState {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'Cambiar contraseña (${admin.email})',
+                  isSelf
+                      ? 'Cambiar contraseña'
+                      : 'Restablecer contraseña (${admin.email})',
                   style: const TextStyle(color: Colors.white, fontSize: 18),
                 ),
               ),
@@ -2038,27 +2051,60 @@ extension _LicenseDashboardView on _LicenseHomeState {
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextField(
-                  controller: currentController,
-                  obscureText: hideCurrent,
-                  style: const TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    labelText: 'Contraseña actual',
-                    labelStyle: const TextStyle(color: Colors.white70),
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        hideCurrent
-                            ? CupertinoIcons.eye_slash
-                            : CupertinoIcons.eye,
-                        color: Colors.white60,
-                      ),
-                      onPressed: () =>
-                          setDialogState(() => hideCurrent = !hideCurrent),
+                if (!isSelf) ...[
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    margin: const EdgeInsets.only(bottom: 14),
+                    decoration: BoxDecoration(
+                      color: const Color(0x2200E5FF),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0x5500E5FF)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          CupertinoIcons.info_circle_fill,
+                          color: Color(0xFF00E5FF),
+                          size: 16,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Como Creador, estás asignando una nueva contraseña a ${admin.email} sin requerir su contraseña anterior.',
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                const SizedBox(height: 12),
+                ],
+                if (isSelf) ...[
+                  TextField(
+                    controller: currentController,
+                    obscureText: hideCurrent,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      labelText: 'Contraseña actual',
+                      labelStyle: const TextStyle(color: Colors.white70),
+                      suffixIcon: IconButton(
+                        icon: Icon(
+                          hideCurrent
+                              ? CupertinoIcons.eye_slash
+                              : CupertinoIcons.eye,
+                          color: Colors.white60,
+                        ),
+                        onPressed: () =>
+                            setDialogState(() => hideCurrent = !hideCurrent),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 TextField(
                   controller: newController,
                   obscureText: hideNew,
@@ -2122,9 +2168,15 @@ extension _LicenseDashboardView on _LicenseHomeState {
                 final next = newController.text;
                 final confirm = confirmController.text;
 
-                if (current.isEmpty || next.isEmpty || confirm.isEmpty) {
+                if (isSelf && current.isEmpty) {
                   setDialogState(
-                    () => errorText = 'Todos los campos son requeridos.',
+                    () => errorText = 'Ingresa tu contraseña actual.',
+                  );
+                  return;
+                }
+                if (next.isEmpty || confirm.isEmpty) {
+                  setDialogState(
+                    () => errorText = 'Ingresa y confirma la nueva contraseña.',
                   );
                   return;
                 }
@@ -2148,7 +2200,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   action: () async {
                     final ok = await widget.issuer.changeAdminPassword(
                       admin.email,
-                      current,
+                      isSelf ? current : null,
                       next,
                     );
                     if (mounted) {
@@ -2157,7 +2209,9 @@ extension _LicenseDashboardView on _LicenseHomeState {
                         SnackBar(
                           content: Text(
                             ok
-                                ? 'Contraseña actualizada correctamente.'
+                                ? (isSelf
+                                    ? 'Contraseña actualizada correctamente.'
+                                    : 'Contraseña de ${admin.email} restablecida correctamente.')
                                 : 'La contraseña actual es incorrecta o falló la actualización.',
                           ),
                           backgroundColor: ok
@@ -2170,7 +2224,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   },
                 );
               },
-              child: const Text('Guardar'),
+              child: Text(isSelf ? 'Actualizar' : 'Restablecer'),
             ),
           ],
         ),

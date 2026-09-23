@@ -1185,7 +1185,7 @@ class LicenseIssuer {
 
   Future<bool> changeAdminPassword(
     String email,
-    String currentPassword,
+    String? currentPassword,
     String newPassword,
   ) async {
     final normalized = email.trim().toLowerCase();
@@ -1195,12 +1195,26 @@ class LicenseIssuer {
       );
     }
 
-    final isValidCurrent = await _verifyOfflinePassword(
-      normalized,
-      currentPassword,
-    );
-    if (!isValidCurrent) {
-      return false;
+    final isCreator = (currentUser ?? '').toLowerCase() == 'david.zapata@bdjstudio.com';
+    final isSelf = (currentUser ?? '').toLowerCase() == normalized;
+
+    if (!isCreator && !isSelf) {
+      throw StateError('Solo el creador o el propio usuario pueden cambiar la contraseña.');
+    }
+
+    // Solo si el usuario está cambiando su propia contraseña se requiere validar la contraseña actual.
+    // El creador puede cambiar/restablecer la contraseña de cualquier usuario sin necesidad de saber la anterior.
+    if (isSelf) {
+      if (currentPassword == null || currentPassword.isEmpty) {
+        return false;
+      }
+      final isValidCurrent = await _verifyOfflinePassword(
+        normalized,
+        currentPassword,
+      );
+      if (!isValidCurrent) {
+        return false;
+      }
     }
 
     final saltBytes = List<int>.generate(
