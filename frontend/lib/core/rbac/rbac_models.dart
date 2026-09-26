@@ -23,12 +23,19 @@ class AppModule {
 
   static const usuarios = AppModule(
     id: 'usuarios',
-    name: 'Usuarios y Roles',
-    description: 'Control de acceso, administración de usuarios y configuración de permisos (RBAC).',
+    name: 'Usuarios',
+    description: 'Alta, edición, baja y asignación de rol de los usuarios del sistema.',
     icon: CupertinoIcons.person_crop_circle_badge_checkmark,
   );
 
-  static const List<AppModule> all = [gestion, usuarios];
+  static const roles = AppModule(
+    id: 'roles',
+    name: 'Roles y Permisos',
+    description: 'Catálogo de roles y matriz de permisos y accesos por módulo.',
+    icon: CupertinoIcons.shield_lefthalf_fill,
+  );
+
+  static const List<AppModule> all = [gestion, usuarios, roles];
 
   static const List<String> availableActions = ['create', 'read', 'update', 'delete'];
 
@@ -67,11 +74,12 @@ class AppRole {
   static const superAdmin = AppRole(
     id: 'super_admin',
     name: 'Super Administrador',
-    description: 'Acceso total e irrestricto a todos los módulos y operaciones del sistema (Creador).',
+    description: 'Acceso total a Gestión, Usuarios y Roles (Creador).',
     isSystem: true,
     permissions: {
       'gestion': {'create': true, 'read': true, 'update': true, 'delete': true},
       'usuarios': {'create': true, 'read': true, 'update': true, 'delete': true},
+      'roles': {'create': true, 'read': true, 'update': true, 'delete': true},
     },
   );
 
@@ -79,11 +87,12 @@ class AppRole {
   static const licenseAdmin = AppRole(
     id: 'license_admin',
     name: 'Administrador de Licencias',
-    description: 'Acceso completo al módulo de Gestión de Licencias (Crear, Buscar, Actualizar, Eliminar). Sin acceso al módulo de Usuarios.',
+    description: 'CRUD completo de licencias. Sin acceso a Usuarios ni Roles.',
     isSystem: true,
     permissions: {
       'gestion': {'create': true, 'read': true, 'update': true, 'delete': true},
       'usuarios': {'create': false, 'read': false, 'update': false, 'delete': false},
+      'roles': {'create': false, 'read': false, 'update': false, 'delete': false},
     },
   );
 
@@ -96,6 +105,7 @@ class AppRole {
     permissions: {
       'gestion': {'create': true, 'read': true, 'update': false, 'delete': false},
       'usuarios': {'create': false, 'read': false, 'update': false, 'delete': false},
+      'roles': {'create': false, 'read': false, 'update': false, 'delete': false},
     },
   );
 
@@ -108,6 +118,7 @@ class AppRole {
     permissions: {
       'gestion': {'create': false, 'read': true, 'update': false, 'delete': false},
       'usuarios': {'create': false, 'read': false, 'update': false, 'delete': false},
+      'roles': {'create': false, 'read': false, 'update': false, 'delete': false},
     },
   );
 

@@ -17,19 +17,40 @@ LicenseIssuer _issuerAs(String role, {Map<String, Map<String, bool>>? perms}) {
 void main() {
   test('Super Administrador: acceso total', () {
     final i = _issuerAs('super_admin');
-    for (final m in ['gestion', 'usuarios']) {
+    for (final m in ['gestion', 'usuarios', 'roles']) {
       for (final a in ['create', 'read', 'update', 'delete']) {
         expect(i.canDo(m, a), isTrue, reason: '$m.$a');
       }
     }
   });
 
-  test('Administrador de Licencias: CRUD de licencias, sin usuarios', () {
+  test('Administrador de Licencias: CRUD de licencias, sin usuarios ni roles', () {
     final i = _issuerAs('license_admin');
     for (final a in ['create', 'read', 'update', 'delete']) {
       expect(i.canDo('gestion', a), isTrue, reason: 'gestion.$a');
       expect(i.canDo('usuarios', a), isFalse, reason: 'usuarios.$a');
+      expect(i.canDo('roles', a), isFalse, reason: 'roles.$a');
     }
+  });
+
+  test('Módulo Roles: nadie edita su propio rol salvo el Super Admin', () {
+    const supervisor = AppRole(
+      id: 'supervisor',
+      name: 'Supervisor',
+      description: '',
+      permissions: {
+        'gestion': {'read': true},
+        'roles': {'read': true, 'update': true},
+      },
+    );
+    final i = _issuerAs('supervisor');
+    i.roles.add(supervisor);
+    expect(i.canDo('roles', 'update'), isTrue);
+    expect(i.canEditRole(supervisor), isFalse);
+    expect(i.canEditRole(AppRole.operator), isTrue);
+    expect(i.canEditRole(AppRole.superAdmin), isFalse);
+    expect(i.assignableRoles.any((r) => r.id == 'super_admin'), isFalse);
+    expect(_issuerAs('super_admin').assignableRoles.any((r) => r.id == 'super_admin'), isTrue);
   });
 
   test('Operador de Licencias: solo crear y buscar', () {

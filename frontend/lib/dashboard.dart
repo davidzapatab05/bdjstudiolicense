@@ -90,28 +90,52 @@ extension _LicenseDashboardView on _LicenseHomeState {
           ),
         ],
       ),
-      bottomNavigationBar: wide || !widget.issuer.canDo('usuarios', 'read')
+      bottomNavigationBar: wide || _visibleSections().length < 2
           ? null
           : NavigationBar(
-              selectedIndex: selectedSection,
-              onDestinationSelected: (value) =>
-                  updateDashboard(() => selectedSection = value),
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(CupertinoIcons.person_2_square_stack_fill),
-                  label: 'Gestión',
-                ),
-                NavigationDestination(
-                  icon: Icon(CupertinoIcons.person_crop_circle_badge_checkmark),
-                  label: 'Usuarios',
-                ),
+              selectedIndex: _visibleSections()
+                  .indexOf(_currentSection())
+                  .clamp(0, _visibleSections().length - 1),
+              onDestinationSelected: (value) => updateDashboard(
+                () => selectedSection = _visibleSections()[value],
+              ),
+              destinations: [
+                for (final section in _visibleSections())
+                  NavigationDestination(
+                    icon: Icon(_sectionIcon(section)),
+                    label: _sectionLabel(section),
+                  ),
               ],
             ),
     );
   }
 
+  /// Secciones del menú según permisos: 0 Gestión · 1 Usuarios · 2 Roles.
+  List<int> _visibleSections() => [
+        if (widget.issuer.canDo('gestion', 'read')) 0,
+        if (widget.issuer.canDo('usuarios', 'read')) 1,
+        if (widget.issuer.canDo('roles', 'read')) 2,
+      ];
+
+  int _currentSection() {
+    final visible = _visibleSections();
+    if (visible.contains(selectedSection)) return selectedSection;
+    return visible.isEmpty ? -1 : visible.first;
+  }
+
+  String _sectionLabel(int section) => switch (section) {
+        1 => 'Usuarios',
+        2 => 'Roles',
+        _ => 'Gestión',
+      };
+
+  IconData _sectionIcon(int section) => switch (section) {
+        1 => CupertinoIcons.person_crop_circle_badge_checkmark,
+        2 => CupertinoIcons.shield_lefthalf_fill,
+        _ => CupertinoIcons.person_2_square_stack_fill,
+      };
+
   Widget _dashboardSidebar() {
-    final canUsers = widget.issuer.canDo('usuarios', 'read');
     final isCreator = widget.issuer.isSuperAdmin;
     final currentAdmin = widget.issuer.currentAdmin;
     final roleTitle = isCreator
@@ -123,11 +147,9 @@ extension _LicenseDashboardView on _LicenseHomeState {
                 : currentAdmin.displayRole));
     final roleSubtitle = isCreator
         ? 'Control total (Protegido)'
-        : (widget.issuer.canDo('gestion', 'update') || widget.issuer.canDo('gestion', 'delete')
-            ? 'Gestión de licencias'
-            : (widget.issuer.canDo('gestion', 'create')
-                ? 'Crear y buscar licencias'
-                : 'Solo lectura'));
+        : (_visibleSections().isEmpty
+            ? 'Sin accesos'
+            : _visibleSections().map(_sectionLabel).join(' · '));
 
     return Container(
       width: 250,
@@ -138,36 +160,20 @@ extension _LicenseDashboardView on _LicenseHomeState {
       padding: const EdgeInsets.fromLTRB(14, 24, 14, 18),
       child: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Material(
-              color: Colors.transparent,
-              child: ListTile(
-                selected: selectedSection == 0,
-                selectedTileColor: const Color(0x335E5CE6),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                leading: const Icon(CupertinoIcons.person_2_square_stack_fill),
-                title: const Text('Gestión'),
-                onTap: () => updateDashboard(() => selectedSection = 0),
-              ),
-            ),
-          ),
-          if (canUsers)
+          for (final section in _visibleSections())
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Material(
                 color: Colors.transparent,
                 child: ListTile(
-                  selected: selectedSection == 1,
+                  selected: _currentSection() == section,
                   selectedTileColor: const Color(0x335E5CE6),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  leading: const Icon(CupertinoIcons.person_crop_circle_badge_checkmark),
-                  title: const Text('Usuarios'),
-                  onTap: () => updateDashboard(() => selectedSection = 1),
+                  leading: Icon(_sectionIcon(section)),
+                  title: Text(_sectionLabel(section)),
+                  onTap: () => updateDashboard(() => selectedSection = section),
                 ),
               ),
             ),
@@ -199,12 +205,15 @@ extension _LicenseDashboardView on _LicenseHomeState {
   }
 
   Widget _dashboardSection() {
-    if (selectedSection == 1 && !widget.issuer.canDo('usuarios', 'read')) {
-      return _managementPage();
-    }
-    return switch (selectedSection) {
+    return switch (_currentSection()) {
       1 => _usersPage(),
-      _ => _managementPage(),
+      2 => _rolesPage(),
+      0 => _managementPage(),
+      _ => _dashboardPage(
+          title: 'Sin accesos',
+          subtitle: 'Tu rol no tiene permisos asignados. Contacta al Super Administrador.',
+          children: const [],
+        ),
     };
   }
 
@@ -1804,48 +1813,68 @@ extension _LicenseDashboardView on _LicenseHomeState {
   Widget _usersPage() {
     final isCreator = widget.issuer.isSuperAdmin;
     final activeCount = widget.issuer.admins.where((a) => a.isActive).length;
-    final rolesCount = widget.issuer.allRoles.length;
-
     return _dashboardPage(
-      title: 'Usuarios y Roles',
-      subtitle: 'Control de acceso basado en roles (RBAC) y gestión de usuarios del sistema.',
+      title: 'Usuarios',
+      subtitle: 'Alta, edición, baja, asignación de rol y contraseñas ($activeCount activos).',
       children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 20),
-          child: Row(
-            children: [
-              FilterChip(
-                avatar: const Icon(CupertinoIcons.person_2_fill, size: 16),
-                label: Text('Usuarios ($activeCount)'),
-                selected: usersSubTab == 0,
-                onSelected: (val) {
-                  if (val) updateDashboard(() => usersSubTab = 0);
-                },
-                selectedColor: const Color(0xFF2A3050),
-                checkmarkColor: Colors.cyanAccent,
-              ),
-              const SizedBox(width: 10),
-              FilterChip(
-                avatar: const Icon(CupertinoIcons.shield_lefthalf_fill, size: 16),
-                label: Text('Roles y Permisos ($rolesCount)'),
-                selected: usersSubTab == 1,
-                onSelected: (val) {
-                  if (val) updateDashboard(() => usersSubTab = 1);
-                },
-                selectedColor: const Color(0xFF2A3050),
-                checkmarkColor: Colors.cyanAccent,
-              ),
-            ],
-          ),
-        ),
-        if (usersSubTab == 0) ...[
+        if (widget.issuer.canDo('usuarios', 'create')) ...[
           _buildUserCreationPanel(isCreator),
           const SizedBox(height: 18),
-          _buildUsersListPanel(isCreator),
-        ] else ...[
-          _buildRolesAndPermissionsPanel(isCreator),
         ],
+        _buildUsersListPanel(isCreator),
       ],
+    );
+  }
+
+  Widget _rolesPage() {
+    return _dashboardPage(
+      title: 'Roles y Permisos',
+      subtitle: 'Catálogo de roles y matriz de permisos y accesos por módulo (Gestión, Usuarios, Roles).',
+      children: [_buildRolesAndPermissionsPanel(widget.issuer.isSuperAdmin)],
+    );
+  }
+
+  /// Plantilla con todos los módulos y acciones (rellena lo que falte).
+  Map<String, Map<String, bool>> _fullPerms([Map<String, Map<String, bool>>? source]) => {
+        for (final mod in AppModule.all)
+          mod.id: {
+            for (final act in AppModule.availableActions)
+              act: source?[mod.id]?[act] ?? false,
+          },
+      };
+
+  /// Resumen legible de lo que concede un rol en cada módulo.
+  Widget _roleAccessSummary(Map<String, Map<String, bool>> perms, {bool full = false}) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0x14FFFFFF),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0x22FFFFFF)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final mod in AppModule.all)
+            Builder(builder: (_) {
+              final allowed = AppModule.availableActions
+                  .where((act) => full || (perms[mod.id]?[act] ?? false))
+                  .map((act) => AppModule.actionLabels[act] ?? act)
+                  .toList();
+              final ok = allowed.isNotEmpty;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Text(
+                  ok ? '✓ ${mod.name}: ${allowed.join(', ')}' : '✗ ${mod.name}: sin acceso',
+                  style: TextStyle(
+                    color: ok ? const Color(0xFF30D158) : Colors.white54,
+                    fontSize: 12,
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
     );
   }
 
@@ -1912,8 +1941,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       ),
                     ),
                   ),
-                  if (isCreator)
-                    SizedBox(
+                  SizedBox(
                       width: fullWidth ?? 600,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1927,7 +1955,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                             spacing: 8,
                             runSpacing: 8,
                             children: [
-                              ...widget.issuer.allRoles.map((role) {
+                              ...widget.issuer.assignableRoles.map((role) {
                                 final isSelected = selectedNewAdminRole == role.id ||
                                     (selectedNewAdminRole == 'super' && role.id == 'super_admin');
                                 return ChoiceChip(
@@ -1963,91 +1991,24 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                   },
                                 );
                               }),
-                              ChoiceChip(
-                                selected: selectedNewAdminRole == 'custom',
-                                label: const Text('Personalizado (CRUD)'),
-                                avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 15),
-                                onSelected: (val) {
-                                  if (val) {
-                                    updateDashboard(() {
-                                      selectedNewAdminRole = 'custom';
-                                    });
-                                  }
-                                },
-                              ),
+                              if (widget.issuer.canDo('roles', 'update'))
+                                ChoiceChip(
+                                  selected: selectedNewAdminRole == 'custom',
+                                  label: const Text('Personalizado (CRUD)'),
+                                  avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 15),
+                                  onSelected: (val) {
+                                    if (val) {
+                                      updateDashboard(() {
+                                        selectedNewAdminRole = 'custom';
+                                        newAdminPermissions = _fullPerms(newAdminPermissions);
+                                      });
+                                    }
+                                  },
+                                ),
                             ],
                           ),
                           const SizedBox(height: 8),
-                          if (selectedNewAdminRole == 'operator')
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0x1A30D158),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: const Color(0x3330D158)),
-                              ),
-                              child: const Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '✓ Solo verá el módulo de Gestión (podrá crear y buscar licencias y clientes).',
-                                    style: TextStyle(color: Color(0xFF30D158), fontSize: 12),
-                                  ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    '✗ NO verá el módulo Usuarios (estará completamente oculto).',
-                                    style: TextStyle(color: Colors.white70, fontSize: 12),
-                                  ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    '✗ NO podrá eliminar licencias ni eliminar clientes.',
-                                    style: TextStyle(color: Colors.white70, fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            )
-                          else if (selectedNewAdminRole == 'super' || selectedNewAdminRole == 'super_admin')
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0x1A00E5FF),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: const Color(0x3300E5FF)),
-                              ),
-                              child: const Text(
-                                '✓ Acceso total al sistema: Gestión completa (crear, buscar, editar, eliminar) y módulo Usuarios.',
-                                style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
-                              ),
-                            )
-                          else if (selectedNewAdminRole == 'auditor')
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0x1ABF5AF2),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: const Color(0x33BF5AF2)),
-                              ),
-                              child: const Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    '✓ Solo lectura: Búsqueda y consulta de clientes y licencias en Gestión.',
-                                    style: TextStyle(color: Color(0xFFBF5AF2), fontSize: 12),
-                                  ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    '✗ Sin permisos de creación ni modificación.',
-                                    style: TextStyle(color: Colors.white70, fontSize: 12),
-                                  ),
-                                  SizedBox(height: 3),
-                                  Text(
-                                    '✗ Módulo Usuarios completamente oculto.',
-                                    style: TextStyle(color: Colors.white70, fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            )
-                          else if (selectedNewAdminRole == 'custom') ...[
+                          if (selectedNewAdminRole == 'custom') ...[
                             const SizedBox(height: 6),
                             _permissionsEditor(
                               permissions: newAdminPermissions,
@@ -2058,17 +2019,9 @@ extension _LicenseDashboardView on _LicenseHomeState {
                               },
                             ),
                           ] else
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0x1AFF9F0A),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(color: const Color(0x33FF9F0A)),
-                              ),
-                              child: Text(
-                                widget.issuer.findRole(selectedNewAdminRole).description,
-                                style: const TextStyle(color: Color(0xFFFF9F0A), fontSize: 12),
-                              ),
+                            _roleAccessSummary(
+                              widget.issuer.findRole(selectedNewAdminRole).permissions,
+                              full: AdminAccount.normalizeRole(selectedNewAdminRole) == 'super_admin',
                             ),
                         ],
                       ),
@@ -2148,23 +2101,23 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     ],
                   );
             final actions = <Widget>[
-              // Cada usuario cambia su propia contraseña (Supabase Auth). Los
-              // restablecimientos de terceros se hacen desde el panel de Supabase.
-              if (isCurrent)
+              // Cada usuario cambia la suya; el Super Administrador puede
+              // restablecer la de cualquier otro (por si la olvida).
+              if (isCurrent || isLoggedUserCreator)
                 TextButton.icon(
                   onPressed: () => _showChangePasswordDialog(admin),
                   icon: const Icon(CupertinoIcons.lock_shield, size: 16),
-                  label: const Text('Cambiar contraseña'),
+                  label: Text(isCurrent ? 'Cambiar contraseña' : 'Restablecer contraseña'),
                   style: TextButton.styleFrom(
                     foregroundColor: const Color(0xFF5E5CE6),
                   ),
                 ),
-              // Solo el creador puede editar permisos o reasignar roles de otros usuarios (no del creador mismo)
-              if (isLoggedUserCreator && !isCreatorAdmin)
+              // Reasignar rol: permiso usuarios.update (nunca a un Super Admin ni a sí mismo)
+              if (widget.issuer.canDo('usuarios', 'update') && !isCreatorAdmin && !isCurrent)
                 TextButton.icon(
                   onPressed: () => _showEditPermissionsDialog(admin),
                   icon: const Icon(CupertinoIcons.checkmark_shield, size: 16),
-                  label: const Text('Rol y Permisos'),
+                  label: const Text('Cambiar rol'),
                   style: TextButton.styleFrom(
                     foregroundColor: Colors.amberAccent,
                   ),
@@ -2172,7 +2125,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
               // Solo se puede eliminar si NO es el creador ni la sesión actual, y si el usuario logueado es Creador o tiene permiso de borrado en usuarios
               if (!isCreatorAdmin &&
                   !isCurrent &&
-                  (isLoggedUserCreator || widget.issuer.canDo('usuarios', 'delete')))
+                  widget.issuer.canDo('usuarios', 'delete'))
                 IconButton(
                   tooltip: 'Eliminar Usuario',
                   icon: const Icon(
@@ -2262,7 +2215,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       ],
                     ),
                   ),
-                  if (isCreator)
+                  if (widget.issuer.canDo('roles', 'create'))
                     FilledButton.icon(
                       onPressed: _showCreateCustomRoleDialog,
                       icon: const Icon(CupertinoIcons.plus_circle_fill, size: 16),
@@ -2338,14 +2291,15 @@ extension _LicenseDashboardView on _LicenseHomeState {
                           ),
                         ),
                       ),
-                      if (role.id != 'super_admin' && isCreator) ...[
+                      if (widget.issuer.canEditRole(role) || widget.issuer.canDeleteRole(role)) ...[
                         const SizedBox(width: 8),
-                        IconButton(
-                          tooltip: 'Editar permisos del rol',
-                          icon: const Icon(CupertinoIcons.pencil, size: 16, color: Colors.amberAccent),
-                          onPressed: () => _showEditCustomRoleDialog(role),
-                        ),
-                        if (!isSys)
+                        if (widget.issuer.canEditRole(role))
+                          IconButton(
+                            tooltip: 'Editar permisos del rol',
+                            icon: const Icon(CupertinoIcons.pencil, size: 16, color: Colors.amberAccent),
+                            onPressed: () => _showEditCustomRoleDialog(role),
+                          ),
+                        if (widget.issuer.canDeleteRole(role))
                           IconButton(
                             tooltip: 'Eliminar rol',
                             icon: const Icon(CupertinoIcons.trash, size: 16, color: Colors.redAccent),
@@ -2371,7 +2325,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                               role.permissions[mod.id == 'usuarios' ? 'admins' : mod.id] ??
                               {};
                           return Container(
-                            width: isNarrow ? constraints.maxWidth : (constraints.maxWidth - 20) / 2,
+                            width: isNarrow ? constraints.maxWidth : (constraints.maxWidth - 40) / 3,
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
                               color: const Color(0xFF131722),
@@ -2535,7 +2489,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Como Creador, estás asignando una nueva contraseña a ${admin.email} sin requerir su contraseña anterior.',
+                            'Como Super Administrador asignas una nueva contraseña a ${admin.email} sin su contraseña anterior. Sus sesiones abiertas se cerrarán.',
                             style: const TextStyle(
                               color: Colors.white70,
                               fontSize: 12,
@@ -3096,11 +3050,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
   void _showEditPermissionsDialog(AdminAccount admin) {
     String currentEditRole = admin.role;
     final initialRole = widget.issuer.findRole(currentEditRole);
-    final editPerms = Map<String, Map<String, bool>>.from(
-      (admin.permissions ?? initialRole.permissions).map(
-        (k, v) => MapEntry(k, Map<String, bool>.from(v)),
-      ),
-    );
+    final editPerms = _fullPerms(admin.permissions ?? initialRole.permissions);
 
     showDialog(
       context: context,
@@ -3108,7 +3058,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
         builder: (ctx, setDialogState) => AlertDialog(
           backgroundColor: const Color(0xFF1E2235),
           title: Text(
-            'Rol y Permisos de ${admin.email}',
+            'Cambiar rol de ${admin.email}',
             style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
           ),
           content: SizedBox(
@@ -3127,7 +3077,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      ...widget.issuer.allRoles.map((role) {
+                      ...widget.issuer.assignableRoles.map((role) {
                         final isSelected = currentEditRole == role.id ||
                             (currentEditRole == 'super' && role.id == 'super_admin') ||
                             (currentEditRole == 'super_admin' && role.id == 'super_admin');
@@ -3158,79 +3108,29 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                 currentEditRole = role.id;
                                 editPerms
                                   ..clear()
-                                  ..addAll(role.permissions);
+                                  ..addAll(_fullPerms(role.permissions));
                               });
                             }
                           },
                         );
                       }),
-                      ChoiceChip(
-                        selected: currentEditRole == 'custom',
-                        label: const Text('Personalizado (CRUD)'),
-                        avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 14),
-                        onSelected: (val) {
-                          if (val) {
-                            setDialogState(() {
-                              currentEditRole = 'custom';
-                            });
-                          }
-                        },
-                      ),
+                      if (widget.issuer.canDo('roles', 'update'))
+                        ChoiceChip(
+                          selected: currentEditRole == 'custom',
+                          label: const Text('Personalizado (CRUD)'),
+                          avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 14),
+                          onSelected: (val) {
+                            if (val) {
+                              setDialogState(() {
+                                currentEditRole = 'custom';
+                              });
+                            }
+                          },
+                        ),
                     ],
                   ),
                   const SizedBox(height: 12),
-                  if (currentEditRole == 'operator')
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0x1A30D158),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0x3330D158)),
-                      ),
-                      child: const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('✓ Solo módulo de Gestión (crear y buscar licencias).', style: TextStyle(color: Color(0xFF30D158), fontSize: 12)),
-                          SizedBox(height: 2),
-                          Text('✗ Módulo Usuarios totalmente oculto.', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                          SizedBox(height: 2),
-                          Text('✗ No puede eliminar clientes ni licencias.', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                        ],
-                      ),
-                    )
-                  else if (currentEditRole == 'super' || currentEditRole == 'super_admin')
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0x1A00E5FF),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0x3300E5FF)),
-                      ),
-                      child: const Text(
-                        '✓ Acceso total al sistema: Gestión completa y Usuarios.',
-                        style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
-                      ),
-                    )
-                  else if (currentEditRole == 'auditor')
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0x1ABF5AF2),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0x33BF5AF2)),
-                      ),
-                      child: const Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('✓ Solo lectura: Búsqueda y consulta en Gestión.', style: TextStyle(color: Color(0xFFBF5AF2), fontSize: 12)),
-                          SizedBox(height: 2),
-                          Text('✗ Sin permisos de creación ni modificación.', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                          SizedBox(height: 2),
-                          Text('✗ Módulo Usuarios totalmente oculto.', style: TextStyle(color: Colors.white70, fontSize: 12)),
-                        ],
-                      ),
-                    )
-                  else if (currentEditRole == 'custom')
+                  if (currentEditRole == 'custom')
                     _permissionsEditor(
                       permissions: editPerms,
                       compact: true,
@@ -3241,17 +3141,9 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       },
                     )
                   else
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0x1AFF9F0A),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0x33FF9F0A)),
-                      ),
-                      child: Text(
-                        widget.issuer.findRole(currentEditRole).description,
-                        style: const TextStyle(color: Color(0xFFFF9F0A), fontSize: 12),
-                      ),
+                    _roleAccessSummary(
+                      widget.issuer.findRole(currentEditRole).permissions,
+                      full: AdminAccount.normalizeRole(currentEditRole) == 'super_admin',
                     ),
                 ],
               ),

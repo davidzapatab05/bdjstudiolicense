@@ -3,12 +3,16 @@
 La consola ya no guarda contraseñas ni roles en la app. El login es Supabase Auth y
 cada lectura/escritura la autoriza la base de datos (RLS + `has_perm()`).
 
-| Rol | Usuario | Licencias | Usuarios |
-|---|---|---|---|
-| `super_admin` | david.zapata@bdjstudio.com | CRUD | CRUD |
-| `license_admin` | maylor.neyra@bdjstudio.com | CRUD (editable desde *Roles y Permisos*) | — |
-| `operator` | prueba@bdjstudio.com | Crear + buscar | — |
-| `auditor` | — | Buscar | — |
+Tres módulos, cada uno con CRUD propio: **Gestión** (licencias y clientes), **Usuarios**, **Roles** (permisos y accesos).
+
+| Rol | Usuario | Gestión | Usuarios | Roles |
+|---|---|---|---|---|
+| `super_admin` | david.zapata@bdjstudio.com | CRUD | CRUD | CRUD |
+| `license_admin` | maylor.neyra@bdjstudio.com | CRUD (editable) | — | — |
+| `operator` | prueba@bdjstudio.com | Crear + buscar | — | — |
+| `auditor` | — | Buscar | — | — |
+
+Migraciones (en orden): `20260926_rbac_rls.sql` → `20260926_02_modulo_roles_passwords.sql`.
 
 ## Puesta en marcha (en este orden)
 
@@ -25,19 +29,19 @@ cada lectura/escritura la autoriza la base de datos (RLS + `has_perm()`).
 
 ## Operación diaria
 
-- **Crear usuario** desde la consola: crea la fila con su rol y registra el acceso en Auth
-  (el usuario recibe correo de confirmación). Alternativa sin correo: crearlo en
-  *Authentication → Users → Add user*; se vincula solo por correo.
-- **Restablecer contraseña de otro**: *Authentication → Users → … → Send password recovery*.
-  Cada usuario cambia la suya desde la consola.
-- **Editar permisos de un rol** (p. ej. quitar *Eliminar* al Administrador de Licencias):
-  *Usuarios → Roles y Permisos → lápiz*. Aplica a todos los usuarios con ese rol al instante.
+- **Crear usuario** (Usuarios → Crear): la cuenta queda lista para entrar, sin correo de confirmación.
+- **Contraseñas**: cada usuario cambia la suya; el Super Administrador restablece la de cualquiera
+  (Usuarios → Restablecer contraseña) y se cierran sus sesiones abiertas.
+- **Roles** (menú Roles): crear roles nuevos y editar la matriz de permisos de cada uno.
+  El cambio aplica al instante a todos los usuarios con ese rol.
 
 ## Qué garantiza la BD
 
 - La anon key sin sesión no lee ni escribe nada.
 - Un usuario autenticado sin fila activa en `admin_accounts` no ve nada.
-- Solo `super_admin` cambia roles/permisos, crea otro `super_admin` o edita roles.
+- Solo `super_admin` crea o modifica a otro `super_admin`.
+- Nadie puede otorgar permisos que él mismo no tiene, ni editar su propio rol o cambiarse de rol.
+- Un rol asignado a usuarios no se puede eliminar.
 - No se puede eliminar ni degradar al último `super_admin`; nadie se borra a sí mismo.
 - `licenses.issued_by` lo pone el servidor con el correo del token (no se falsifica).
 - Renovar/cambiar plan de una licencia activa exige permiso **update**

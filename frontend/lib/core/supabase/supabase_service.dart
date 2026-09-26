@@ -311,6 +311,43 @@ class SupabaseService {
 
   static String _eq(String value) => 'eq.${Uri.encodeComponent(value)}';
 
+  /// Llama a una función SQL expuesta por PostgREST (/rest/v1/rpc/...).
+  Future<dynamic> _rpc(String function, Map<String, dynamic> params) async {
+    await _ensureFreshToken();
+    final res = await http
+        .post(
+          Uri.parse('$supabaseUrl/rest/v1/rpc/$function'),
+          headers: _authHeaders(),
+          body: jsonEncode(params),
+        )
+        .timeout(_timeout);
+    _throwIfError(res);
+    return res.body.isEmpty ? null : jsonDecode(res.body);
+  }
+
+  /// Crea la cuenta de acceso (ya confirmada) y le asigna el rol.
+  /// La BD valida usuarios.create y que no se otorguen permisos de más.
+  Future<void> adminCreateUser({
+    required String email,
+    required String password,
+    required String role,
+    Map<String, Map<String, bool>>? permissions,
+  }) =>
+      _rpc('admin_create_user', {
+        'p_email': email.trim().toLowerCase(),
+        'p_password': password,
+        'p_role': role,
+        'p_permissions': role == 'custom' ? permissions : null,
+      });
+
+  /// Restablece la contraseña de otro usuario (solo Super Administrador)
+  /// y cierra sus sesiones abiertas.
+  Future<void> adminSetPassword(String email, String password) =>
+      _rpc('admin_set_password', {
+        'p_email': email.trim().toLowerCase(),
+        'p_password': password,
+      });
+
   // ------------------------------------------------------------------
   // Customers
   // ------------------------------------------------------------------

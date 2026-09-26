@@ -153,13 +153,13 @@ insert into public.admin_accounts (id, email, role, is_active)
 select v.email, v.email, v.role, true
   from (values
     ('david.zapata@bdjstudio.com', 'super_admin'),
-    ('maylor.neyra@bdjstudio.com', 'license_admin'),
-    ('prueba@bdjstudio.com',       'operator')
+    ('maylor.neyra@bdjstudio.com', 'license_admin')
   ) as v(email, role)
  where not exists (select 1 from public.admin_accounts a where lower(a.email) = v.email);
 
 update public.admin_accounts set role = 'super_admin',   permissions = null, is_active = true where email = 'david.zapata@bdjstudio.com';
 update public.admin_accounts set role = 'license_admin', permissions = null where email = 'maylor.neyra@bdjstudio.com';
+-- prueba@bdjstudio.com se crea desde la consola (Usuarios → rol Operador de Licencias).
 update public.admin_accounts set role = 'operator',      permissions = null where email = 'prueba@bdjstudio.com';
 
 -- ---------------------------------------------------------------------

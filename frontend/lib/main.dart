@@ -157,7 +157,6 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
   final adminPassword = TextEditingController();
   final customerSearch = TextEditingController();
   var obscurePassword = true;
-  var usersSubTab = 0; // 0: Usuarios, 1: Roles y Permisos
   var obscureAdminPassword = true;
   var selectedSection = 0;
   var customerPage = 0;
@@ -652,21 +651,38 @@ class LicenseIssuer {
     return AppRole.operator;
   }
 
+  /// ¿Puede el usuario actual editar este rol? (la BD lo vuelve a validar)
+  bool canEditRole(AppRole role) {
+    if (role.id == 'super_admin' || role.id == 'custom') return false;
+    if (!canDo('roles', 'update')) return false;
+    return isSuperAdmin || currentAdmin?.role != role.id;
+  }
+
+  bool canDeleteRole(AppRole role) => !role.isSystem && canDo('roles', 'delete');
+
+  /// Roles que el usuario actual puede asignar a otros.
+  List<AppRole> get assignableRoles => allRoles
+      .where((r) => r.id != 'super_admin' || isSuperAdmin)
+      .toList();
+
   Future<void> saveCustomRole(AppRole role) async {
-    if (!isSuperAdmin) {
-      throw StateError('Solo el Super Administrador puede editar roles.');
-    }
     if (role.id == 'super_admin' || role.id == 'custom') {
       throw StateError('Este rol no se puede editar.');
     }
     final exists = roles.any((r) => r.id == role.id);
+    if (exists) {
+      if (!canEditRole(role)) throw StateError('No tienes permiso para editar este rol.');
+    } else {
+      _requirePermission('roles', 'create', 'No tienes permiso para crear roles.');
+    }
     await supabase.saveRole(role, exists: exists);
     await _refreshRoles();
   }
 
   Future<void> deleteCustomRole(String roleId) async {
-    if (!isSuperAdmin) {
-      throw StateError('Solo el Super Administrador puede eliminar roles.');
+    _requirePermission('roles', 'delete', 'No tienes permiso para eliminar roles.');
+    if (admins.any((a) => a.role == roleId)) {
+      throw StateError('El rol está asignado a usuarios: reasígnalos antes de eliminarlo.');
     }
     await supabase.deleteRole(roleId);
     await _refreshRoles();
@@ -770,7 +786,7 @@ class LicenseIssuer {
     try {
       final visible = await supabase.fetchAdmins();
       final me = visible.cast<AdminAccount?>().firstWhere(
-            (a) => a!.email == session.email,
+            (a) => a!.userId == session.userId || a.email == session.email,
             orElse: () => null,
           );
       if (me == null || !me.isActive) {
@@ -1021,32 +1037,24 @@ class LicenseIssuer {
     _requirePermission('usuarios', 'create', 'No tienes permiso para crear usuarios.');
     final normalized = email.trim().toLowerCase();
     final cleanRole = AdminAccount.normalizeRole(role);
-    if (!normalized.contains('@')) {
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(normalized)) {
       throw ArgumentError('Indica un correo válido.');
     }
     if (password.length < 8) {
       throw ArgumentError('La contraseña debe tener al menos 8 caracteres.');
     }
-    if ((cleanRole == 'super_admin' || cleanRole == 'custom') && !isSuperAdmin) {
-      throw StateError('Solo el Super Administrador puede asignar ese rol.');
+    if (cleanRole == 'super_admin' && !isSuperAdmin) {
+      throw StateError('Solo el Super Administrador puede crear otro Super Administrador.');
     }
-    final account = AdminAccount(
-      id: normalized,
+    if (cleanRole == 'custom' && !canDo('roles', 'update')) {
+      throw StateError('Necesitas permiso de Roles para asignar permisos personalizados.');
+    }
+    await supabase.adminCreateUser(
       email: normalized,
+      password: password,
       role: cleanRole,
-      isActive: true,
-      permissions: cleanRole == 'custom' ? permissions : null,
+      permissions: permissions,
     );
-    // 1) Fila con el rol (RLS: usuarios.create). 2) Cuenta de acceso en Auth.
-    await supabase.insertAdmin(account);
-    try {
-      await supabase.signUpUser(normalized, password);
-    } on SupabaseException catch (e) {
-      // La fila queda creada: el usuario puede registrarse luego con su correo.
-      throw StateError(
-        'Rol asignado, pero no se pudo crear el acceso: ${e.message}',
-      );
-    }
     await syncWithCloud();
   }
 
@@ -1077,8 +1085,12 @@ class LicenseIssuer {
     bool? isActive,
   }) async {
     _requirePermission('usuarios', 'update', 'No tienes permiso para editar usuarios.');
-    if ((permissions != null || role != null) && !isSuperAdmin) {
-      throw StateError('Solo el Super Administrador puede modificar roles o permisos.');
+    final requested = role == null ? null : AdminAccount.normalizeRole(role);
+    if (requested == 'super_admin' && !isSuperAdmin) {
+      throw StateError('Solo el Super Administrador asigna ese rol.');
+    }
+    if (requested == 'custom' && !canDo('roles', 'update')) {
+      throw StateError('Necesitas permiso de Roles para asignar permisos personalizados.');
     }
     final key = id.trim().toLowerCase();
     final previous = admins.cast<AdminAccount?>().firstWhere(
@@ -1098,26 +1110,28 @@ class LicenseIssuer {
     await syncWithCloud();
   }
 
-  /// Cambia la contraseña del usuario conectado (Supabase Auth). Restablecer
-  /// la de otra persona requiere la service key, así que se hace desde el
-  /// panel de Supabase (Authentication → Users).
+  /// Cada usuario cambia su propia contraseña (valida la actual). El Super
+  /// Administrador puede restablecer la de cualquier otro usuario.
   Future<bool> changeAdminPassword(
     String email,
     String? currentPassword,
     String newPassword,
   ) async {
     final normalized = email.trim().toLowerCase();
-    if (newPassword.trim().length < 8) {
+    final next = newPassword.trim();
+    if (next.length < 8) {
       throw ArgumentError('La nueva contraseña debe tener al menos 8 caracteres.');
     }
     if (normalized != currentUser) {
-      throw StateError(
-        'Para restablecer la contraseña de otro usuario usa Supabase → Authentication → Users → "Send password recovery".',
-      );
+      if (!isSuperAdmin) {
+        throw StateError('Solo el Super Administrador puede restablecer contraseñas de otros usuarios.');
+      }
+      await supabase.adminSetPassword(normalized, next);
+      return true;
     }
     if (currentPassword == null || currentPassword.isEmpty) return false;
     if (!await supabase.verifyPassword(normalized, currentPassword)) return false;
-    await supabase.updateOwnPassword(newPassword.trim());
+    await supabase.updateOwnPassword(next);
     return true;
   }
 
