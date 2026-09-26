@@ -90,7 +90,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
           ),
         ],
       ),
-      bottomNavigationBar: wide
+      bottomNavigationBar: wide || !widget.issuer.canDo('admins', 'read')
           ? null
           : NavigationBar(
               selectedIndex: selectedSection,
@@ -110,60 +110,103 @@ extension _LicenseDashboardView on _LicenseHomeState {
     );
   }
 
-  Widget _dashboardSidebar() => Container(
-    width: 250,
-    decoration: const BoxDecoration(
-      color: Color(0xFF0E121B),
-      border: Border(right: BorderSide(color: Color(0xFF1E2530))),
-    ),
-    padding: const EdgeInsets.fromLTRB(14, 24, 14, 18),
-    child: Column(
-      children: [
-        for (final item in const [
-          (CupertinoIcons.person_2_square_stack_fill, 'Gestión'),
-          (CupertinoIcons.person_crop_circle_badge_checkmark, 'Administradores'),
-        ].indexed)
+  Widget _dashboardSidebar() {
+    final canAdmins = widget.issuer.canDo('admins', 'read');
+    final isCreator = (widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
+    final currentAdmin = widget.issuer.admins.cast<AdminAccount?>().firstWhere(
+      (a) => a?.email.trim().toLowerCase() == (widget.issuer.currentUser ?? '').trim().toLowerCase(),
+      orElse: () => null,
+    );
+
+    final roleTitle = isCreator
+        ? 'Creador'
+        : (currentAdmin?.displayRole ?? (widget.issuer.currentRole == 'super' ? 'Super Admin' : 'Operador'));
+    final roleSubtitle = isCreator
+        ? 'Control total (Protegido)'
+        : (currentAdmin?.role == 'super'
+            ? 'Acceso total'
+            : (currentAdmin?.role == 'operator'
+                ? 'Solo Gestión'
+                : 'Acceso Personalizado'));
+
+    return Container(
+      width: 250,
+      decoration: const BoxDecoration(
+        color: Color(0xFF0E121B),
+        border: Border(right: BorderSide(color: Color(0xFF1E2530))),
+      ),
+      padding: const EdgeInsets.fromLTRB(14, 24, 14, 18),
+      child: Column(
+        children: [
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Material(
               color: Colors.transparent,
               child: ListTile(
-                selected: selectedSection == item.$1,
+                selected: selectedSection == 0,
                 selectedTileColor: const Color(0x335E5CE6),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                leading: Icon(item.$2.$1),
-                title: Text(item.$2.$2),
-                onTap: () => updateDashboard(() => selectedSection = item.$1),
+                leading: const Icon(CupertinoIcons.person_2_square_stack_fill),
+                title: const Text('Gestión'),
+                onTap: () => updateDashboard(() => selectedSection = 0),
               ),
             ),
           ),
-        const Spacer(),
-        ListTile(
-          leading: const CircleAvatar(
-            backgroundColor: Color(0x335E5CE6),
-            child: Icon(CupertinoIcons.person_fill, size: 18),
+          if (canAdmins)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  selected: selectedSection == 1,
+                  selectedTileColor: const Color(0x335E5CE6),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  leading: const Icon(CupertinoIcons.person_crop_circle_badge_checkmark),
+                  title: const Text('Administradores'),
+                  onTap: () => updateDashboard(() => selectedSection = 1),
+                ),
+              ),
+            ),
+          const Spacer(),
+          ListTile(
+            leading: CircleAvatar(
+              backgroundColor: isCreator ? const Color(0x3300E5FF) : const Color(0x335E5CE6),
+              child: Icon(
+                isCreator ? CupertinoIcons.shield_fill : CupertinoIcons.person_fill,
+                size: 18,
+                color: isCreator ? const Color(0xFF00E5FF) : null,
+              ),
+            ),
+            title: Text(
+              roleTitle,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: isCreator ? const Color(0xFF00E5FF) : null,
+              ),
+            ),
+            subtitle: Text(
+              roleSubtitle,
+              style: const TextStyle(fontSize: 12),
+            ),
           ),
-          title: Text(
-            widget.issuer.currentRole == 'super'
-                ? 'Super Admin'
-                : 'Administrador',
-          ),
-          subtitle: Text(
-            widget.issuer.currentRole == 'super'
-                ? 'Acceso total'
-                : 'Acceso al panel',
-          ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 
-  Widget _dashboardSection() => switch (selectedSection) {
-    1 => _usersPage(),
-    _ => _managementPage(),
-  };
+  Widget _dashboardSection() {
+    if (selectedSection == 1 && !widget.issuer.canDo('admins', 'read')) {
+      return _managementPage();
+    }
+    return switch (selectedSection) {
+      1 => _usersPage(),
+      _ => _managementPage(),
+    };
+  }
 
   Widget _dashboardPage({
     required String title,
@@ -1830,13 +1873,116 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     if ((widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com')
                       SizedBox(
                         width: fullWidth ?? 600,
-                        child: _permissionsEditor(
-                          permissions: newAdminPermissions,
-                          onChanged: (module, action, value) {
-                            updateDashboard(() {
-                              newAdminPermissions[module]?[action] = value;
-                            });
-                          },
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Tipo de Usuario / Rol',
+                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.amberAccent),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                ChoiceChip(
+                                  selected: selectedNewAdminRole == 'operator',
+                                  label: const Text('Operador de Gestión (Colaborador)'),
+                                  avatar: const Icon(CupertinoIcons.person_badge_plus, size: 16),
+                                  selectedColor: const Color(0xFF1E3A2B),
+                                  checkmarkColor: const Color(0xFF30D158),
+                                  onSelected: (val) {
+                                    if (val) {
+                                      updateDashboard(() {
+                                        selectedNewAdminRole = 'operator';
+                                        newAdminPermissions = AdminAccount.operatorPermissions();
+                                      });
+                                    }
+                                  },
+                                ),
+                                ChoiceChip(
+                                  selected: selectedNewAdminRole == 'super',
+                                  label: const Text('Super Admin (Confianza total)'),
+                                  avatar: const Icon(CupertinoIcons.shield_fill, size: 16),
+                                  selectedColor: const Color(0xFF1E2A3A),
+                                  checkmarkColor: const Color(0xFF00E5FF),
+                                  onSelected: (val) {
+                                    if (val) {
+                                      updateDashboard(() {
+                                        selectedNewAdminRole = 'super';
+                                        newAdminPermissions = AdminAccount.defaultPermissions();
+                                      });
+                                    }
+                                  },
+                                ),
+                                ChoiceChip(
+                                  selected: selectedNewAdminRole == 'custom',
+                                  label: const Text('Personalizado (CRUD)'),
+                                  avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 16),
+                                  onSelected: (val) {
+                                    if (val) {
+                                      updateDashboard(() {
+                                        selectedNewAdminRole = 'custom';
+                                      });
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            if (selectedNewAdminRole == 'operator')
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x1A30D158),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0x3330D158)),
+                                ),
+                                child: const Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '✓ Solo verá el módulo de Gestión (podrá crear y buscar licencias).',
+                                      style: TextStyle(color: Color(0xFF30D158), fontSize: 12),
+                                    ),
+                                    SizedBox(height: 3),
+                                    Text(
+                                      '✗ NO verá el módulo Administradores (estará completamente oculto).',
+                                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                                    ),
+                                    SizedBox(height: 3),
+                                    Text(
+                                      '✗ NO podrá eliminar licencias ni eliminar clientes.',
+                                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            if (selectedNewAdminRole == 'super')
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x1A00E5FF),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: const Color(0x3300E5FF)),
+                                ),
+                                child: const Text(
+                                  '✓ Acceso total al sistema: Gestión completa (crear, buscar, editar, eliminar) y módulo Administradores.',
+                                  style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
+                                ),
+                              ),
+                            if (selectedNewAdminRole == 'custom') ...[
+                              const SizedBox(height: 6),
+                              _permissionsEditor(
+                                permissions: newAdminPermissions,
+                                onChanged: (module, action, value) {
+                                  updateDashboard(() {
+                                    newAdminPermissions[module]?[action] = value;
+                                  });
+                                },
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     SizedBox(
@@ -1845,7 +1991,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       child: FilledButton.icon(
                         onPressed: addAdmin,
                         icon: const Icon(CupertinoIcons.add),
-                        label: const Text('Crear administrador'),
+                        label: const Text('Crear usuario'),
                       ),
                     ),
                   ],
@@ -1901,7 +2047,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   color: isCreatorAdmin ? const Color(0xFF00E5FF) : null,
                 ),
               );
-              final permSummary = !isCreatorAdmin && admin.permissions != null
+              final permSummary = !isCreatorAdmin && admin.role == 'custom' && admin.permissions != null
                   ? _buildPermissionSummary(admin.permissions!)
                   : null;
               final subtitle = isCreatorAdmin
@@ -1966,7 +2112,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _roleBadge(admin.role),
+                          _roleBadge(admin.role, admin.email),
                           const SizedBox(width: 8),
                           ...actions,
                         ],
@@ -1992,7 +2138,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                               ),
                             ),
                             const SizedBox(width: 8),
-                            _roleBadge(admin.role),
+                            _roleBadge(admin.role, admin.email),
                           ],
                         ),
                         Wrap(children: actions),
@@ -2460,9 +2606,9 @@ extension _LicenseDashboardView on _LicenseHomeState {
   }
 
   void _showEditPermissionsDialog(AdminAccount admin) {
-    // Clonar permisos actuales del admin
+    String currentEditRole = admin.role;
     final editPerms = Map<String, Map<String, bool>>.from(
-      (admin.permissions ?? AdminAccount.defaultPermissions()).map(
+      (admin.permissions ?? (admin.role == 'operator' ? AdminAccount.operatorPermissions() : AdminAccount.defaultPermissions())).map(
         (k, v) => MapEntry(k, Map<String, bool>.from(v)),
       ),
     );
@@ -2473,18 +2619,118 @@ extension _LicenseDashboardView on _LicenseHomeState {
         builder: (ctx, setDialogState) => AlertDialog(
           backgroundColor: const Color(0xFF1E2235),
           title: Text(
-            'Permisos de ${admin.email}',
+            'Rol y Permisos de ${admin.email}',
             style: const TextStyle(color: Colors.white, fontSize: 16),
           ),
           content: SizedBox(
-            width: 420,
-            child: _permissionsEditor(
-              permissions: editPerms,
-              onChanged: (module, action, value) {
-                setDialogState(() {
-                  editPerms[module]?[action] = value;
-                });
-              },
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Rol / Nivel de Acceso',
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.amberAccent),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      ChoiceChip(
+                        selected: currentEditRole == 'operator',
+                        label: const Text('Operador de Gestión'),
+                        avatar: const Icon(CupertinoIcons.person_badge_plus, size: 15),
+                        selectedColor: const Color(0xFF1E3A2B),
+                        checkmarkColor: const Color(0xFF30D158),
+                        onSelected: (val) {
+                          if (val) {
+                            setDialogState(() {
+                              currentEditRole = 'operator';
+                              editPerms
+                                ..clear()
+                                ..addAll(AdminAccount.operatorPermissions());
+                            });
+                          }
+                        },
+                      ),
+                      ChoiceChip(
+                        selected: currentEditRole == 'super',
+                        label: const Text('Super Admin'),
+                        avatar: const Icon(CupertinoIcons.shield_fill, size: 15),
+                        selectedColor: const Color(0xFF1E2A3A),
+                        checkmarkColor: const Color(0xFF00E5FF),
+                        onSelected: (val) {
+                          if (val) {
+                            setDialogState(() {
+                              currentEditRole = 'super';
+                              editPerms
+                                ..clear()
+                                ..addAll(AdminAccount.defaultPermissions());
+                            });
+                          }
+                        },
+                      ),
+                      ChoiceChip(
+                        selected: currentEditRole == 'custom',
+                        label: const Text('Personalizado'),
+                        avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 15),
+                        onSelected: (val) {
+                          if (val) {
+                            setDialogState(() {
+                              currentEditRole = 'custom';
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (currentEditRole == 'operator')
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0x1A30D158),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0x3330D158)),
+                      ),
+                      child: const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('✓ Solo módulo de Gestión (crear y buscar licencias).', style: TextStyle(color: Color(0xFF30D158), fontSize: 12)),
+                          SizedBox(height: 2),
+                          Text('✗ Módulo Administradores totalmente oculto.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                          SizedBox(height: 2),
+                          Text('✗ No puede eliminar clientes ni licencias.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  if (currentEditRole == 'super')
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0x1A00E5FF),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0x3300E5FF)),
+                      ),
+                      child: const Text(
+                        '✓ Acceso total al sistema: Gestión completa y Administradores.',
+                        style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
+                      ),
+                    ),
+                  if (currentEditRole == 'custom')
+                    _permissionsEditor(
+                      permissions: editPerms,
+                      compact: true,
+                      onChanged: (module, action, value) {
+                        setDialogState(() {
+                          editPerms[module]?[action] = value;
+                        });
+                      },
+                    ),
+                ],
+              ),
             ),
           ),
           actions: [
@@ -2499,13 +2745,16 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   await widget.issuer.updateAdmin(
                     admin.id ?? admin.email,
                     email: admin.email,
-                    permissions: editPerms,
+                    role: currentEditRole,
+                    permissions: currentEditRole == 'custom'
+                        ? editPerms
+                        : (currentEditRole == 'super' ? AdminAccount.defaultPermissions() : AdminAccount.operatorPermissions()),
                   );
                   if (mounted) {
                     updateDashboard(() {});
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text('Permisos de ${admin.email} actualizados.'),
+                        content: Text('Rol y permisos de ${admin.email} actualizados.'),
                         behavior: SnackBarBehavior.floating,
                       ),
                     );
@@ -2544,20 +2793,47 @@ extension _LicenseDashboardView on _LicenseHomeState {
     );
   }
 
-  Widget _roleBadge([String? role]) {
-    final isMaster = role == 'super';
+  Widget _roleBadge([String? role, String? email]) {
+    final cleanEmail = (email ?? '').trim().toLowerCase();
+    final isCreator = cleanEmail == 'david.zapata@bdjstudio.com';
+    final isSuper = role == 'super';
+    final isOperator = role == 'operator';
+
+    Color bg;
+    Color fg;
+    String label;
+
+    if (isCreator) {
+      bg = const Color(0x3300E5FF);
+      fg = const Color(0xFF00E5FF);
+      label = 'Creador';
+    } else if (isSuper) {
+      bg = const Color(0x3300E5FF);
+      fg = const Color(0xFF00E5FF);
+      label = 'Super Admin';
+    } else if (isOperator) {
+      bg = const Color(0x3330D158);
+      fg = const Color(0xFF30D158);
+      label = 'Operador (Gestión)';
+    } else {
+      bg = const Color(0x33FF9F0A);
+      fg = const Color(0xFFFF9F0A);
+      label = 'Personalizado';
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
       decoration: BoxDecoration(
-        color: isMaster ? const Color(0x3300E5FF) : const Color(0x3330D158),
+        color: bg,
         borderRadius: BorderRadius.circular(20),
-        border: isMaster ? Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.5), width: 1) : null,
+        border: Border.all(color: fg.withValues(alpha: 0.5), width: 1),
       ),
       child: Text(
-        isMaster ? 'Super Admin' : 'Administrador',
+        label,
         style: TextStyle(
-          color: isMaster ? const Color(0xFF00E5FF) : const Color(0xFF30D158),
+          color: fg,
           fontWeight: FontWeight.w600,
+          fontSize: 12,
         ),
       ),
     );

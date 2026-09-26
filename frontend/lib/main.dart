@@ -163,7 +163,8 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
   bool isProcessing = false;
   String processingMessage = '';
   Timer? _liveSyncTimer;
-  Map<String, Map<String, bool>> newAdminPermissions = AdminAccount.defaultPermissions();
+  String selectedNewAdminRole = 'operator';
+  Map<String, Map<String, bool>> newAdminPermissions = AdminAccount.operatorPermissions();
 
   @override
   void initState() {
@@ -258,15 +259,19 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
       await widget.issuer.addAdmin(
         adminEmail.text.trim(),
         adminPassword.text,
-        permissions: Map<String, Map<String, bool>>.from(
-          newAdminPermissions.map((k, v) => MapEntry(k, Map<String, bool>.from(v))),
-        ),
+        role: selectedNewAdminRole,
+        permissions: selectedNewAdminRole == 'custom'
+            ? Map<String, Map<String, bool>>.from(
+                newAdminPermissions.map((k, v) => MapEntry(k, Map<String, bool>.from(v))),
+              )
+            : (selectedNewAdminRole == 'super' ? AdminAccount.defaultPermissions() : AdminAccount.operatorPermissions()),
       );
       adminEmail.clear();
       adminPassword.clear();
       setState(() {
         error = null;
-        newAdminPermissions = AdminAccount.defaultPermissions();
+        selectedNewAdminRole = 'operator';
+        newAdminPermissions = AdminAccount.operatorPermissions();
       });
     } on Object catch (exception) {
       setState(() => error = exception.toString());
@@ -1122,7 +1127,7 @@ class LicenseIssuer {
     currentRole = 'super';
   }
 
-  Future<void> addAdmin(String email, String password, {Map<String, Map<String, bool>>? permissions}) async {
+  Future<void> addAdmin(String email, String password, {String role = 'operator', Map<String, Map<String, bool>>? permissions}) async {
     final isCreator = (currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
     final normalized = email.trim().toLowerCase();
     final saltBytes = List<int>.generate(
@@ -1136,14 +1141,14 @@ class LicenseIssuer {
     // Solo el Creador principal puede asignar permisos personalizados.
     final effectivePermissions = (isCreator && permissions != null)
         ? permissions
-        : AdminAccount.defaultPermissions();
+        : (role == 'super' ? AdminAccount.defaultPermissions() : AdminAccount.operatorPermissions());
 
     final account = AdminAccount(
       id: 'admin_${DateTime.now().millisecondsSinceEpoch}',
       email: normalized,
       passwordHash: hashStr,
       passwordSalt: saltStr,
-      role: 'super',
+      role: role,
       isActive: true,
       permissions: effectivePermissions,
     );
@@ -1185,11 +1190,12 @@ class LicenseIssuer {
     String id, {
     required String email,
     String? password,
+    String? role,
     Map<String, Map<String, bool>>? permissions,
   }) async {
     final isCreator = (currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
-    if (permissions != null && !isCreator) {
-      throw StateError('Solo el Creador principal (david.zapata@bdjstudio.com) puede modificar los permisos de los administradores.');
+    if ((permissions != null || role != null) && !isCreator) {
+      throw StateError('Solo el Creador principal (david.zapata@bdjstudio.com) puede modificar los permisos o roles de los administradores.');
     }
     final normalized = email.trim().toLowerCase();
     final index = admins.indexWhere(
@@ -1210,7 +1216,7 @@ class LicenseIssuer {
         email: normalized,
         passwordHash: hash,
         passwordSalt: salt,
-        role: previous.role,
+        role: role ?? previous.role,
         isActive: previous.isActive,
         permissions: isCreator ? (permissions ?? previous.permissions) : previous.permissions,
       );
@@ -2233,7 +2239,7 @@ class AdminAccount {
   /// Acciones CRUD disponibles.
   static const availableActions = ['create', 'read', 'update', 'delete'];
 
-  /// Permisos por defecto: acceso total a todo.
+  /// Permisos por defecto: acceso total a todo (Super Admin).
   static Map<String, Map<String, bool>> defaultPermissions() => {
     for (final module in availableModules)
       module: {
@@ -2241,8 +2247,25 @@ class AdminAccount {
       },
   };
 
+  /// Permisos para Operador de Gestión (solo crear y buscar licencias, cero acceso a admins ni borrado).
+  static Map<String, Map<String, bool>> operatorPermissions() => {
+    'gestion': {'create': true, 'read': true, 'update': false, 'delete': false},
+    'admins': {'create': false, 'read': false, 'update': false, 'delete': false},
+  };
+
+  /// Etiqueta legible del rol.
+  String get displayRole {
+    if (email.trim().toLowerCase() == 'david.zapata@bdjstudio.com') {
+      return 'Creador';
+    }
+    if (role == 'super') return 'Super Admin';
+    if (role == 'operator') return 'Operador';
+    return 'Personalizado';
+  }
+
   /// Verifica si el admin tiene permiso para una acción en un módulo.
   bool hasPermission(String module, String action) {
+    if (role == 'super') return true;
     if (permissions == null) return true; // Sin permisos definidos = acceso total
     final modulePerms = permissions![module];
     if (modulePerms == null) return false;
@@ -2266,40 +2289,72 @@ class AdminAccount {
         }
       }
     }
+    final r = json['role'] as String? ?? 'super';
+    if (perms == null) {
+      if (r == 'operator') {
+        perms = operatorPermissions();
+      } else if (r == 'super') {
+        perms = defaultPermissions();
+      }
+    }
     return AdminAccount(
       id: json['id'] as String?,
       email: json['email'] as String,
       passwordHash: json['passwordHash'] as String,
       passwordSalt: json['passwordSalt'] as String?,
-      role: json['role'] as String,
+      role: r,
       isActive: json['isActive'] as bool? ?? true,
       permissions: perms,
     );
   }
 
   factory AdminAccount.fromRemote(Map<dynamic, dynamic> json) {
+    final roleRaw = json['role'] as String? ?? 'super';
+    String cleanRole = roleRaw;
     Map<String, Map<String, bool>>? perms;
-    if (json['permissions'] != null) {
-      final raw = json['permissions'];
-      if (raw is Map) {
-        perms = {};
-        for (final entry in raw.entries) {
-          final moduleMap = entry.value;
-          if (moduleMap is Map) {
-            perms[entry.key.toString()] = {
-              for (final e in moduleMap.entries)
-                e.key.toString(): e.value == true,
-            };
-          }
+
+    if (json['permissions'] != null && json['permissions'] is Map) {
+      final raw = json['permissions'] as Map;
+      perms = {};
+      for (final entry in raw.entries) {
+        final moduleMap = entry.value;
+        if (moduleMap is Map) {
+          perms[entry.key.toString()] = {
+            for (final e in moduleMap.entries)
+              e.key.toString(): e.value == true,
+          };
         }
       }
+    } else if (roleRaw.startsWith('custom:')) {
+      cleanRole = 'custom';
+      try {
+        final decoded = jsonDecode(roleRaw.substring(7));
+        if (decoded is Map) {
+          perms = {};
+          for (final entry in decoded.entries) {
+            if (entry.value is Map) {
+              perms[entry.key.toString()] = {
+                for (final e in (entry.value as Map).entries)
+                  e.key.toString(): e.value == true,
+              };
+            }
+          }
+        }
+      } catch (_) {}
+    } else if (roleRaw == 'operator') {
+      cleanRole = 'operator';
+      perms = operatorPermissions();
+    } else if (roleRaw == 'super') {
+      cleanRole = 'super';
+      perms = defaultPermissions();
     }
+
     return AdminAccount(
       id: json['id'] as String?,
       email: json['email'] as String,
       passwordHash: '',
-      role: json['role'] as String? ?? 'super',
-      isActive: json['isActive'] as bool? ?? true,
+      role: cleanRole,
+      isActive: json['is_active'] ?? json['isActive'] ?? true,
       permissions: perms,
     );
   }
