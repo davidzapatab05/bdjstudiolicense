@@ -163,6 +163,7 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
   bool isProcessing = false;
   String processingMessage = '';
   Timer? _liveSyncTimer;
+  Map<String, Map<String, bool>> newAdminPermissions = AdminAccount.defaultPermissions();
 
   @override
   void initState() {
@@ -251,13 +252,22 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
     if (isProcessing) return;
     setState(() {
       isProcessing = true;
-      processingMessage = 'Creando Super Admin...';
+      processingMessage = 'Creando administrador...';
     });
     try {
-      await widget.issuer.addAdmin(adminEmail.text.trim(), adminPassword.text);
+      await widget.issuer.addAdmin(
+        adminEmail.text.trim(),
+        adminPassword.text,
+        permissions: Map<String, Map<String, bool>>.from(
+          newAdminPermissions.map((k, v) => MapEntry(k, Map<String, bool>.from(v))),
+        ),
+      );
       adminEmail.clear();
       adminPassword.clear();
-      setState(() => error = null);
+      setState(() {
+        error = null;
+        newAdminPermissions = AdminAccount.defaultPermissions();
+      });
     } on Object catch (exception) {
       setState(() => error = exception.toString());
     } finally {
@@ -599,6 +609,20 @@ class LicenseIssuer {
   bool unlocked = false;
   String? currentUser;
   String? currentRole;
+
+  /// Verifica si el usuario actual tiene permiso para ejecutar [action] en [module].
+  /// El Creador (`david.zapata@bdjstudio.com`) siempre tiene acceso total.
+  bool canDo(String module, String action) {
+    final email = (currentUser ?? '').toLowerCase();
+    if (email == 'david.zapata@bdjstudio.com') return true;
+    final admin = admins.cast<AdminAccount?>().firstWhere(
+      (a) => a?.email.toLowerCase() == email,
+      orElse: () => null,
+    );
+    if (admin == null) return false;
+    return admin.hasPermission(module, action);
+  }
+
   final List<LicenseRecord> records = [];
   final List<CustomerRecord> customers = [];
   final List<AdminAccount> admins = [];
@@ -1098,7 +1122,7 @@ class LicenseIssuer {
     currentRole = 'super';
   }
 
-  Future<void> addAdmin(String email, String password) async {
+  Future<void> addAdmin(String email, String password, {Map<String, Map<String, bool>>? permissions}) async {
     final normalized = email.trim().toLowerCase();
     final saltBytes = List<int>.generate(
       16,
@@ -1115,6 +1139,7 @@ class LicenseIssuer {
       passwordSalt: saltStr,
       role: 'super',
       isActive: true,
+      permissions: permissions ?? AdminAccount.defaultPermissions(),
     );
     final existingIdx = admins.indexWhere((a) => a.email.toLowerCase() == normalized);
     if (existingIdx >= 0) {
@@ -1154,6 +1179,7 @@ class LicenseIssuer {
     String id, {
     required String email,
     String? password,
+    Map<String, Map<String, bool>>? permissions,
   }) async {
     final normalized = email.trim().toLowerCase();
     final index = admins.indexWhere(
@@ -1176,6 +1202,7 @@ class LicenseIssuer {
         passwordSalt: salt,
         role: previous.role,
         isActive: previous.isActive,
+        permissions: permissions ?? previous.permissions,
       );
       admins[index] = updated;
       await _saveAdmins();
@@ -1445,8 +1472,8 @@ class LicenseIssuer {
   }
 
   Future<void> deleteCustomer(String customerId) async {
-    if (currentRole != 'super') {
-      throw StateError('Solo un Super Admin puede eliminar clientes.');
+    if (!canDo('gestion', 'delete')) {
+      throw StateError('No tienes permiso para eliminar clientes.');
     }
 
     final targetCustomer = customers.cast<CustomerRecord?>().firstWhere(
@@ -1477,8 +1504,8 @@ class LicenseIssuer {
   }
 
   Future<void> deleteLicense(String licenseId) async {
-    if (currentRole != 'super') {
-      throw StateError('Solo un Super Admin puede eliminar licencias.');
+    if (!canDo('gestion', 'delete')) {
+      throw StateError('No tienes permiso para eliminar licencias.');
     }
     records.removeWhere((r) => r.id == licenseId);
     await _saveLicenseRecords();
@@ -1493,8 +1520,8 @@ class LicenseIssuer {
     required String email,
     required String device,
   }) async {
-    if (currentRole != 'super') {
-      throw StateError('Solo un Super Admin puede editar clientes.');
+    if (!canDo('gestion', 'update')) {
+      throw StateError('No tienes permiso para editar clientes.');
     }
     if (name.trim().isEmpty ||
         !email.contains('@') ||
@@ -1542,8 +1569,8 @@ class LicenseIssuer {
     required Set<String> products,
     bool flushSync = true,
   }) async {
-    if (currentRole != 'super') {
-      throw StateError('Solo un Super Admin puede gestionar accesos.');
+    if (!canDo('gestion', 'update')) {
+      throw StateError('No tienes permiso para gestionar accesos.');
     }
     final removed = records
         .where(
@@ -1577,8 +1604,8 @@ class LicenseIssuer {
 
   // ignore: unused_element
   Future<void> _legacyAddAdminLocal(String email, String password) async {
-    if (currentRole != 'super') {
-      throw StateError('Solo un Super Admin puede crear usuarios.');
+    if (!canDo('admins', 'create')) {
+      throw StateError('No tienes permiso para crear usuarios.');
     }
     final normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail.contains('@') || password.length < 8) {
@@ -1608,8 +1635,8 @@ class LicenseIssuer {
 
   // ignore: unused_element
   Future<void> _legacyDeleteAdmin(String email) async {
-    if (currentRole != 'super') {
-      throw StateError('Solo un Super Admin puede eliminar usuarios.');
+    if (!canDo('admins', 'delete')) {
+      throw StateError('No tienes permiso para eliminar usuarios.');
     }
     admins.removeWhere((admin) => admin.email == email.toLowerCase());
     await prefs!.setStringList(
@@ -2179,6 +2206,7 @@ class AdminAccount {
     this.passwordSalt,
     required this.role,
     this.isActive = true,
+    this.permissions,
   });
 
   final String? id;
@@ -2187,23 +2215,84 @@ class AdminAccount {
   final String? passwordSalt;
   final String role;
   final bool isActive;
+  final Map<String, Map<String, bool>>? permissions;
 
-  factory AdminAccount.fromJson(Map<String, dynamic> json) => AdminAccount(
-    id: json['id'] as String?,
-    email: json['email'] as String,
-    passwordHash: json['passwordHash'] as String,
-    passwordSalt: json['passwordSalt'] as String?,
-    role: json['role'] as String,
-    isActive: json['isActive'] as bool? ?? true,
-  );
+  /// Módulos disponibles en el sistema.
+  static const availableModules = ['gestion', 'admins'];
 
-  factory AdminAccount.fromRemote(Map<dynamic, dynamic> json) => AdminAccount(
-    id: json['id'] as String?,
-    email: json['email'] as String,
-    passwordHash: '',
-    role: json['role'] as String? ?? 'super',
-    isActive: json['isActive'] as bool? ?? true,
-  );
+  /// Acciones CRUD disponibles.
+  static const availableActions = ['create', 'read', 'update', 'delete'];
+
+  /// Permisos por defecto: acceso total a todo.
+  static Map<String, Map<String, bool>> defaultPermissions() => {
+    for (final module in availableModules)
+      module: {
+        for (final action in availableActions) action: true,
+      },
+  };
+
+  /// Verifica si el admin tiene permiso para una acción en un módulo.
+  bool hasPermission(String module, String action) {
+    if (permissions == null) return true; // Sin permisos definidos = acceso total
+    final modulePerms = permissions![module];
+    if (modulePerms == null) return false;
+    return modulePerms[action] ?? false;
+  }
+
+  factory AdminAccount.fromJson(Map<String, dynamic> json) {
+    Map<String, Map<String, bool>>? perms;
+    if (json['permissions'] != null) {
+      final raw = json['permissions'];
+      if (raw is Map) {
+        perms = {};
+        for (final entry in raw.entries) {
+          final moduleMap = entry.value;
+          if (moduleMap is Map) {
+            perms[entry.key.toString()] = {
+              for (final e in moduleMap.entries)
+                e.key.toString(): e.value == true,
+            };
+          }
+        }
+      }
+    }
+    return AdminAccount(
+      id: json['id'] as String?,
+      email: json['email'] as String,
+      passwordHash: json['passwordHash'] as String,
+      passwordSalt: json['passwordSalt'] as String?,
+      role: json['role'] as String,
+      isActive: json['isActive'] as bool? ?? true,
+      permissions: perms,
+    );
+  }
+
+  factory AdminAccount.fromRemote(Map<dynamic, dynamic> json) {
+    Map<String, Map<String, bool>>? perms;
+    if (json['permissions'] != null) {
+      final raw = json['permissions'];
+      if (raw is Map) {
+        perms = {};
+        for (final entry in raw.entries) {
+          final moduleMap = entry.value;
+          if (moduleMap is Map) {
+            perms[entry.key.toString()] = {
+              for (final e in moduleMap.entries)
+                e.key.toString(): e.value == true,
+            };
+          }
+        }
+      }
+    }
+    return AdminAccount(
+      id: json['id'] as String?,
+      email: json['email'] as String,
+      passwordHash: '',
+      role: json['role'] as String? ?? 'super',
+      isActive: json['isActive'] as bool? ?? true,
+      permissions: perms,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -2212,5 +2301,6 @@ class AdminAccount {
     'passwordSalt': passwordSalt,
     'role': role,
     'isActive': isActive,
+    'permissions': permissions,
   };
 }

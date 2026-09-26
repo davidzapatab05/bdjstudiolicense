@@ -197,6 +197,21 @@ class SupabaseService {
         final data = jsonDecode(res.body) as List;
         return data.map((item) {
           final m = item as Map<String, dynamic>;
+          // Parsear permisos JSONB desde Supabase
+          Map<String, Map<String, bool>>? perms;
+          final rawPerms = m['permissions'];
+          if (rawPerms != null && rawPerms is Map) {
+            perms = {};
+            for (final entry in rawPerms.entries) {
+              final moduleMap = entry.value;
+              if (moduleMap is Map) {
+                perms[entry.key.toString()] = {
+                  for (final e in moduleMap.entries)
+                    e.key.toString(): e.value == true,
+                };
+              }
+            }
+          }
           return AdminAccount(
             id: m['id'] as String?,
             email: m['email'] as String,
@@ -204,6 +219,7 @@ class SupabaseService {
             passwordSalt: m['password_salt'] as String?,
             role: m['role'] as String? ?? 'super',
             isActive: m['is_active'] as bool? ?? true,
+            permissions: perms,
           );
         }).toList();
       }
@@ -226,6 +242,7 @@ class SupabaseService {
           'password_salt': admin.passwordSalt ?? '',
           'role': admin.role,
           'is_active': admin.isActive,
+          'permissions': admin.permissions,
           'updated_at': DateTime.now().toUtc().toIso8601String(),
         }),
       ).timeout(_timeout);
@@ -245,6 +262,7 @@ class SupabaseService {
         'password_salt': admin.passwordSalt ?? '',
         'role': admin.role,
         'is_active': admin.isActive,
+        'permissions': admin.permissions,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
       }).toList();
       await http.post(uri, headers: _headers, body: jsonEncode(body)).timeout(_timeout);

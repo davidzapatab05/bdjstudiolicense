@@ -1097,7 +1097,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                   ),
                                 ),
                               ),
-                              if (widget.issuer.currentRole == 'super') ...[
+                              if (widget.issuer.canDo('gestion', 'delete')) ...[
                                 InkWell(
                                   borderRadius: BorderRadius.circular(4),
                                   onTap: () async {
@@ -1205,7 +1205,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   title: Text('Gestionar cliente y licencias'),
                 ),
               ),
-              if (widget.issuer.currentRole == 'super')
+              if (widget.issuer.canDo('gestion', 'delete'))
                 const PopupMenuItem(
                   value: 'deleteCustomer',
                   child: ListTile(
@@ -1827,9 +1827,16 @@ extension _LicenseDashboardView on _LicenseHomeState {
                         ),
                       ),
                     ),
-                    const Chip(
-                      avatar: Icon(CupertinoIcons.person_badge_plus, size: 17),
-                      label: Text('Administrador'),
+                    SizedBox(
+                      width: fullWidth ?? 600,
+                      child: _permissionsEditor(
+                        permissions: newAdminPermissions,
+                        onChanged: (module, action, value) {
+                          updateDashboard(() {
+                            newAdminPermissions[module]?[action] = value;
+                          });
+                        },
+                      ),
                     ),
                     SizedBox(
                       height: 50,
@@ -1893,17 +1900,26 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   color: isCreatorAdmin ? const Color(0xFF00E5FF) : null,
                 ),
               );
+              final permSummary = !isCreatorAdmin && admin.permissions != null
+                  ? _buildPermissionSummary(admin.permissions!)
+                  : null;
               final subtitle = isCreatorAdmin
                   ? const Text(
                       'Creador & Super Admin Principal (Protegido)',
                       style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
                     )
-                  : (isCurrent
-                      ? const Text(
-                          'Sesión actual',
-                          style: TextStyle(color: Colors.white70, fontSize: 12),
-                        )
-                      : null);
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isCurrent)
+                          const Text(
+                            'Sesión actual',
+                            style: TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                        ?permSummary,
+                      ],
+                    );
               final actions = <Widget>[
                 // El creador puede cambiar la contraseña de todos; cada usuario puede cambiar la suya propia
                 if (isCurrent || isLoggedUserCreator)
@@ -1915,10 +1931,20 @@ extension _LicenseDashboardView on _LicenseHomeState {
                       foregroundColor: const Color(0xFF5E5CE6),
                     ),
                   ),
+                // Solo el creador puede editar permisos de otros admins (no del creador mismo)
+                if (isLoggedUserCreator && !isCreatorAdmin)
+                  TextButton.icon(
+                    onPressed: () => _showEditPermissionsDialog(admin),
+                    icon: const Icon(CupertinoIcons.checkmark_shield, size: 16),
+                    label: const Text('Permisos'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.amberAccent,
+                    ),
+                  ),
                 // Solo se puede eliminar si NO es el creador ni la sesión actual, y si el usuario logueado es Creador o Super Admin
                 if (!isCreatorAdmin &&
                     !isCurrent &&
-                    (isLoggedUserCreator || widget.issuer.currentRole == 'super'))
+                    (isLoggedUserCreator || widget.issuer.canDo('admins', 'delete')))
                   IconButton(
                     tooltip: 'Eliminar Administrador',
                     icon: const Icon(
@@ -1960,7 +1986,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   title,
-                                  ?subtitle,
+                                  subtitle,
                                 ],
                               ),
                             ),
@@ -2364,6 +2390,157 @@ extension _LicenseDashboardView on _LicenseHomeState {
     name.dispose();
     email.dispose();
     device.dispose();
+  }
+
+  static const _moduleLabels = {
+    'gestion': 'Gestión (Licencias)',
+    'admins': 'Administradores',
+  };
+
+  static const _actionLabels = {
+    'create': 'Crear',
+    'read': 'Buscar',
+    'update': 'Actualizar',
+    'delete': 'Eliminar',
+  };
+
+  Widget _permissionsEditor({
+    required Map<String, Map<String, bool>> permissions,
+    required void Function(String module, String action, bool value) onChanged,
+    bool compact = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!compact)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: Text(
+              'Permisos',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.amberAccent),
+            ),
+          ),
+        ...AdminAccount.availableModules.map((module) {
+          final modulePerms = permissions[module] ?? {};
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _moduleLabels[module] ?? module,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 0,
+                  children: AdminAccount.availableActions.map((action) {
+                    final enabled = modulePerms[action] ?? true;
+                    return FilterChip(
+                      selected: enabled,
+                      label: Text(
+                        _actionLabels[action] ?? action,
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      onSelected: (val) => onChanged(module, action, val),
+                      selectedColor: const Color(0xFF2A3050),
+                      checkmarkColor: Colors.cyanAccent,
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      visualDensity: VisualDensity.compact,
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  void _showEditPermissionsDialog(AdminAccount admin) {
+    // Clonar permisos actuales del admin
+    final editPerms = Map<String, Map<String, bool>>.from(
+      (admin.permissions ?? AdminAccount.defaultPermissions()).map(
+        (k, v) => MapEntry(k, Map<String, bool>.from(v)),
+      ),
+    );
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E2235),
+          title: Text(
+            'Permisos de ${admin.email}',
+            style: const TextStyle(color: Colors.white, fontSize: 16),
+          ),
+          content: SizedBox(
+            width: 420,
+            child: _permissionsEditor(
+              permissions: editPerms,
+              onChanged: (module, action, value) {
+                setDialogState(() {
+                  editPerms[module]?[action] = value;
+                });
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+            ),
+            FilledButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                try {
+                  await widget.issuer.updateAdmin(
+                    admin.id ?? admin.email,
+                    email: admin.email,
+                    permissions: editPerms,
+                  );
+                  if (mounted) {
+                    updateDashboard(() {});
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Permisos de ${admin.email} actualizados.'),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    updateDashboard(() => error = e.toString());
+                  }
+                }
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget? _buildPermissionSummary(Map<String, Map<String, bool>> perms) {
+    final denied = <String>[];
+    for (final module in AdminAccount.availableModules) {
+      final mp = perms[module];
+      if (mp == null) continue;
+      for (final action in AdminAccount.availableActions) {
+        if (mp[action] != true) {
+          denied.add('${_moduleLabels[module] ?? module}: ${_actionLabels[action] ?? action}');
+        }
+      }
+    }
+    if (denied.isEmpty) return null;
+    return Text(
+      'Sin permiso: ${denied.join(', ')}',
+      style: const TextStyle(color: Colors.orange, fontSize: 11),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+    );
   }
 
   Widget _roleBadge([String? role]) {
