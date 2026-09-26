@@ -1123,6 +1123,7 @@ class LicenseIssuer {
   }
 
   Future<void> addAdmin(String email, String password, {Map<String, Map<String, bool>>? permissions}) async {
+    final isCreator = (currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
     final normalized = email.trim().toLowerCase();
     final saltBytes = List<int>.generate(
       16,
@@ -1132,6 +1133,11 @@ class LicenseIssuer {
     final saltStr = base64UrlEncode(saltBytes);
     final hashStr = base64UrlEncode(derivedHash);
 
+    // Solo el Creador principal puede asignar permisos personalizados.
+    final effectivePermissions = (isCreator && permissions != null)
+        ? permissions
+        : AdminAccount.defaultPermissions();
+
     final account = AdminAccount(
       id: 'admin_${DateTime.now().millisecondsSinceEpoch}',
       email: normalized,
@@ -1139,7 +1145,7 @@ class LicenseIssuer {
       passwordSalt: saltStr,
       role: 'super',
       isActive: true,
-      permissions: permissions ?? AdminAccount.defaultPermissions(),
+      permissions: effectivePermissions,
     );
     final existingIdx = admins.indexWhere((a) => a.email.toLowerCase() == normalized);
     if (existingIdx >= 0) {
@@ -1181,6 +1187,10 @@ class LicenseIssuer {
     String? password,
     Map<String, Map<String, bool>>? permissions,
   }) async {
+    final isCreator = (currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
+    if (permissions != null && !isCreator) {
+      throw StateError('Solo el Creador principal (david.zapata@bdjstudio.com) puede modificar los permisos de los administradores.');
+    }
     final normalized = email.trim().toLowerCase();
     final index = admins.indexWhere(
       (admin) => admin.id == id || admin.email.toLowerCase() == id.toLowerCase(),
@@ -1202,7 +1212,7 @@ class LicenseIssuer {
         passwordSalt: salt,
         role: previous.role,
         isActive: previous.isActive,
-        permissions: permissions ?? previous.permissions,
+        permissions: isCreator ? (permissions ?? previous.permissions) : previous.permissions,
       );
       admins[index] = updated;
       await _saveAdmins();

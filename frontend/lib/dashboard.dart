@@ -1827,17 +1827,18 @@ extension _LicenseDashboardView on _LicenseHomeState {
                         ),
                       ),
                     ),
-                    SizedBox(
-                      width: fullWidth ?? 600,
-                      child: _permissionsEditor(
-                        permissions: newAdminPermissions,
-                        onChanged: (module, action, value) {
-                          updateDashboard(() {
-                            newAdminPermissions[module]?[action] = value;
-                          });
-                        },
+                    if ((widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com')
+                      SizedBox(
+                        width: fullWidth ?? 600,
+                        child: _permissionsEditor(
+                          permissions: newAdminPermissions,
+                          onChanged: (module, action, value) {
+                            updateDashboard(() {
+                              newAdminPermissions[module]?[action] = value;
+                            });
+                          },
+                        ),
                       ),
-                    ),
                     SizedBox(
                       height: 50,
                       width: narrow ? constraints.maxWidth : null,
