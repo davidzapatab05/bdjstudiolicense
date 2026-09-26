@@ -15,6 +15,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'core/filesystem/app_storage_service.dart';
 import 'core/security/keychain_ci_smoke.dart';
 import 'core/supabase/supabase_service.dart';
+import 'core/rbac/rbac_models.dart';
 
 part 'dashboard.dart';
 
@@ -156,6 +157,7 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
   final adminPassword = TextEditingController();
   final customerSearch = TextEditingController();
   var obscurePassword = true;
+  var usersSubTab = 0; // 0: Usuarios, 1: Roles y Permisos
   var obscureAdminPassword = true;
   var selectedSection = 0;
   var customerPage = 0;
@@ -253,18 +255,21 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
     if (isProcessing) return;
     setState(() {
       isProcessing = true;
-      processingMessage = 'Creando administrador...';
+      processingMessage = 'Creando usuario...';
     });
     try {
+      final roleObj = widget.issuer.findRole(selectedNewAdminRole);
+      final rolePerms = selectedNewAdminRole == 'custom'
+          ? Map<String, Map<String, bool>>.from(
+              newAdminPermissions.map((k, v) => MapEntry(k, Map<String, bool>.from(v))),
+            )
+          : roleObj.permissions;
+
       await widget.issuer.addAdmin(
         adminEmail.text.trim(),
         adminPassword.text,
         role: selectedNewAdminRole,
-        permissions: selectedNewAdminRole == 'custom'
-            ? Map<String, Map<String, bool>>.from(
-                newAdminPermissions.map((k, v) => MapEntry(k, Map<String, bool>.from(v))),
-              )
-            : (selectedNewAdminRole == 'super' ? AdminAccount.defaultPermissions() : AdminAccount.operatorPermissions()),
+        permissions: rolePerms,
       );
       adminEmail.clear();
       adminPassword.clear();
@@ -273,6 +278,14 @@ class _LicenseHomeState extends State<LicenseHome> with WidgetsBindingObserver {
         selectedNewAdminRole = 'operator';
         newAdminPermissions = AdminAccount.operatorPermissions();
       });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Usuario creado y sincronizado correctamente.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } on Object catch (exception) {
       setState(() => error = exception.toString());
     } finally {
@@ -600,7 +613,6 @@ class LicenseIssuer {
   static const _testAdminsMigrationKey = 'issuer_test_admins_v2';
   static const _currentSessionEmailKey = 'issuer_session_email_v1';
   static const _sessionTokenKey = 'issuer_session_auth_token_v2';
-  static const _sessionHmacSecret = 'BDJ_STUDIO_AUTH_SESSION_SECRET_V1_2026';
   static const _maxAttempts = 5;
   static const _pbkdf2Iterations = 210000;
   static const _bootstrapFileName = 'issuer.private.json';
@@ -615,17 +627,73 @@ class LicenseIssuer {
   String? currentUser;
   String? currentRole;
 
-  /// Verifica si el usuario actual tiene permiso para ejecutar [action] en [module].
-  /// El Creador (`david.zapata@bdjstudio.com`) siempre tiene acceso total.
+  /// Roles cargados desde la tabla `roles` de Supabase (fuente de verdad).
+  final List<AppRole> roles = [];
+
+  /// Cuenta del usuario conectado (fila propia de admin_accounts).
+  AdminAccount? currentAdmin;
+
+  /// Roles seleccionables en la UI ('custom' se muestra como opción aparte).
+  List<AppRole> get allRoles {
+    final source = roles.isNotEmpty ? roles : AppRole.systemRoles;
+    return source.where((r) => r.id != 'custom').toList();
+  }
+
+  /// Compatibilidad con la UI previa.
+  List<AppRole> get customRoles => roles.where((r) => !r.isSystem).toList();
+
+  bool get isSuperAdmin => currentAdmin?.role == 'super_admin';
+
+  AppRole findRole(String roleId) {
+    final id = AdminAccount.normalizeRole(roleId);
+    for (final r in [...roles, ...AppRole.systemRoles]) {
+      if (r.id == id) return r;
+    }
+    return AppRole.operator;
+  }
+
+  Future<void> saveCustomRole(AppRole role) async {
+    if (!isSuperAdmin) {
+      throw StateError('Solo el Super Administrador puede editar roles.');
+    }
+    if (role.id == 'super_admin' || role.id == 'custom') {
+      throw StateError('Este rol no se puede editar.');
+    }
+    final exists = roles.any((r) => r.id == role.id);
+    await supabase.saveRole(role, exists: exists);
+    await _refreshRoles();
+  }
+
+  Future<void> deleteCustomRole(String roleId) async {
+    if (!isSuperAdmin) {
+      throw StateError('Solo el Super Administrador puede eliminar roles.');
+    }
+    await supabase.deleteRole(roleId);
+    await _refreshRoles();
+  }
+
+  Future<void> _refreshRoles() async {
+    final fetched = await supabase.fetchRoles();
+    roles
+      ..clear()
+      ..addAll(fetched);
+  }
+
+  /// Permiso efectivo del usuario conectado. Es solo para la UI: la base de
+  /// datos vuelve a validar cada operación con RLS (has_perm).
   bool canDo(String module, String action) {
-    final email = (currentUser ?? '').toLowerCase();
-    if (email == 'david.zapata@bdjstudio.com') return true;
-    final admin = admins.cast<AdminAccount?>().firstWhere(
-      (a) => a?.email.toLowerCase() == email,
-      orElse: () => null,
-    );
-    if (admin == null) return false;
-    return admin.hasPermission(module, action);
+    final admin = currentAdmin;
+    if (!unlocked || admin == null || !admin.isActive) return false;
+    final m = module == 'admins' ? 'usuarios' : module;
+    if (admin.role == 'super_admin') return true;
+    if (admin.role == 'custom') {
+      return admin.permissions?[m]?[action] ?? false;
+    }
+    return findRole(admin.role).hasPermission(m, action);
+  }
+
+  void _requirePermission(String module, String action, String message) {
+    if (!canDo(module, action)) throw StateError(message);
   }
 
   final List<LicenseRecord> records = [];
@@ -634,21 +702,6 @@ class LicenseIssuer {
   final supabase = SupabaseService();
   bool isSyncing = false;
   bool get isConfigured => privateKey.isNotEmpty && publicKey.isNotEmpty;
-
-  // Credenciales temporales de pruebas. Solo se almacena un verificador PBKDF2
-  // (nunca la contraseña); reemplázalas desde Usuarios antes de distribuir.
-  static const _testAdmins = [
-    (
-      email: 'david.zapata@bdjstudio.com',
-      salt: 'EhqWvzAIL8vkDSvaChTQzg==',
-      hash: '9ka0UENRF-O4g34-yH5bwaH8qGJsM96wmAXevzutdrg=',
-    ),
-    (
-      email: 'maylor.neyra@bdjstudio.com',
-      salt: 'K3vq2zuglUt9CQutuVL0ng==',
-      hash: 'D7s12WH1yJkGDYAQatS2LrRa8fIgRfaWv6CdhNrFHKU=',
-    ),
-  ];
 
   bool get needsProvisioning => false;
   Future<void> load() async {
@@ -674,201 +727,117 @@ class LicenseIssuer {
         _adminCertificate!.isExpired) {
       await _provisionSpp3OperatorKeys();
     }
-    // Purgar almacenamiento local para cumplir con:
-    // "Que todo se maneje en la bd toda la gestión de licencias nada en el localstorage"
-    await prefs?.remove(_recordsKey);
-    await prefs?.remove(_customersKey);
-    await prefs?.remove(_adminsKey);
-    await prefs?.remove('issuer_sync_queue_v1');
-    await prefs?.remove(_currentSessionEmailKey); // Purgar email en texto plano inseguro
+    // Todo vive en Supabase: se purgan restos de versiones anteriores
+    // (incluidas cuentas y sesiones locales con hash de contraseña).
+    for (final key in [
+      _recordsKey,
+      _customersKey,
+      _adminsKey,
+      'issuer_sync_queue_v1',
+      _currentSessionEmailKey,
+      _sessionTokenKey,
+      _testAdminsMigrationKey,
+      'issuer_custom_roles_v1',
+    ]) {
+      await prefs?.remove(key);
+    }
 
     records.clear();
     customers.clear();
     admins.clear();
 
-    await _restoreTestAdminIfMissing();
-
-    // Cargar directamente desde Supabase y restaurar sesión segura
-    await syncWithCloud();
-    await _restoreSecureSession();
-  }
-
-  String _generateSessionToken(AdminAccount admin) {
-    final issuedAt = DateTime.now().millisecondsSinceEpoch;
-    // Sesión válida por 7 días
-    final expiresAt = DateTime.now().add(const Duration(days: 7)).millisecondsSinceEpoch;
-    final payload = '${admin.email.trim().toLowerCase()}|$issuedAt|$expiresAt|${admin.passwordHash}';
-    final hmac = crypto.Hmac(crypto.sha256, utf8.encode(_sessionHmacSecret));
-    final signature = hmac.convert(utf8.encode(payload)).toString();
-    return jsonEncode({
-      'email': admin.email.trim().toLowerCase(),
-      'issuedAt': issuedAt,
-      'expiresAt': expiresAt,
-      'sig': signature,
-    });
-  }
-
-  bool _verifySessionToken(String tokenJson, AdminAccount admin) {
+    // Restaurar sesión de Supabase Auth (si existe y sigue vigente)
     try {
-      final map = jsonDecode(tokenJson) as Map<String, dynamic>;
-      final email = (map['email'] as String?)?.trim().toLowerCase();
-      final issuedAt = map['issuedAt'] as int?;
-      final expiresAt = map['expiresAt'] as int?;
-      final sig = map['sig'] as String?;
+      if (await supabase.restoreSession()) {
+        if (await _loadCurrentAdmin()) {
+          unlocked = true;
+          await syncWithCloud();
+        } else {
+          await supabase.signOut();
+        }
+      }
+    } catch (e) {
+      // Sin conexión al iniciar: se mostrará el login.
+      debugPrint('No se pudo restaurar la sesión: $e');
+    }
+  }
 
-      if (email == null || issuedAt == null || expiresAt == null || sig == null) {
+  /// Carga la fila propia de admin_accounts y el catálogo de roles.
+  /// Devuelve false si el usuario no tiene cuenta activa en la consola.
+  Future<bool> _loadCurrentAdmin() async {
+    final session = supabase.session;
+    if (session == null) return false;
+    try {
+      final visible = await supabase.fetchAdmins();
+      final me = visible.cast<AdminAccount?>().firstWhere(
+            (a) => a!.email == session.email,
+            orElse: () => null,
+          );
+      if (me == null || !me.isActive) {
+        _clearIdentity();
         return false;
       }
-      if (email != admin.email.trim().toLowerCase()) return false;
-      if (!admin.isActive) return false;
-
-      // Verificar expiración
-      if (DateTime.now().millisecondsSinceEpoch > expiresAt) return false;
-
-      // Recomputar firma HMAC con el hash PBKDF2 verificado de la BD
-      final payload = '$email|$issuedAt|$expiresAt|${admin.passwordHash}';
-      final hmac = crypto.Hmac(crypto.sha256, utf8.encode(_sessionHmacSecret));
-      final expectedSig = hmac.convert(utf8.encode(payload)).toString();
-
-      return _constantTimeEquals(utf8.encode(sig), utf8.encode(expectedSig));
-    } catch (_) {
-      return false;
+      currentAdmin = me;
+      currentUser = me.email;
+      currentRole = me.role;
+      await _refreshRoles();
+      admins
+        ..clear()
+        ..addAll(canDo('usuarios', 'read') ? visible : [me]);
+      return true;
+    } on SupabaseException catch (e) {
+      // Solo un rechazo de autorización cierra la sesión; un fallo de red
+      // se propaga para no expulsar al usuario por una caída momentánea.
+      if (e.isPermissionDenied) {
+        _clearIdentity();
+        return false;
+      }
+      rethrow;
     }
   }
 
-  Future<void> _restoreSecureSession() async {
-    final tokenJson = prefs?.getString(_sessionTokenKey);
-    if (tokenJson == null || tokenJson.isEmpty) return;
-
-    try {
-      final map = jsonDecode(tokenJson) as Map<String, dynamic>;
-      final email = (map['email'] as String?)?.trim().toLowerCase();
-      if (email == null) {
-        await _clearSessionToken();
-        return;
-      }
-
-      // Buscar admin en los datos oficiales de Supabase
-      final admin = admins.cast<AdminAccount?>().firstWhere(
-        (a) => a?.email.trim().toLowerCase() == email && (a?.isActive ?? false),
-        orElse: () => null,
-      );
-
-      if (admin == null) {
-        // Usuario eliminado o desactivado en la BD: revocar acceso inmediatamente
-        await _clearSessionToken();
-        unlocked = false;
-        currentUser = null;
-        currentRole = null;
-        return;
-      }
-
-      // Validar firma HMAC anti-tampering
-      if (_verifySessionToken(tokenJson, admin)) {
-        unlocked = true;
-        currentUser = admin.email;
-        currentRole = admin.role;
-      } else {
-        // Firma alterada o contraseña cambiada: rechazar acceso
-        await _clearSessionToken();
-        unlocked = false;
-        currentUser = null;
-        currentRole = null;
-      }
-    } catch (_) {
-      await _clearSessionToken();
-    }
-  }
-
-  Future<void> _clearSessionToken() async {
-    await prefs?.remove(_sessionTokenKey);
-    await prefs?.remove(_currentSessionEmailKey);
+  void _clearIdentity() {
+    unlocked = false;
+    currentAdmin = null;
+    currentUser = null;
+    currentRole = null;
+    records.clear();
+    customers.clear();
+    admins.clear();
+    roles.clear();
   }
 
   Future<void> syncWithCloud() async {
-    if (isSyncing) return;
+    if (isSyncing || !unlocked) return;
     isSyncing = true;
     try {
+      // Revalida la cuenta en cada sincronización: si fue desactivada,
+      // eliminada o cambió de rol, se aplica de inmediato.
+      if (!await _loadCurrentAdmin()) {
+        await supabase.signOut();
+        _clearIdentity();
+        return;
+      }
+      if (!canDo('gestion', 'read')) {
+        records.clear();
+        customers.clear();
+        return;
+      }
       final results = await Future.wait([
         supabase.fetchCustomers(),
         supabase.fetchLicenses(),
-        supabase.fetchAdmins(),
       ]);
-      final cloudCustomers = results[0] as List<CustomerRecord>?;
-      final cloudLicenses = results[1] as List<LicenseRecord>?;
-      final cloudAdmins = results[2] as List<AdminAccount>?;
-
-      // Supabase es la ÚNICA FUENTE DE VERDAD.
-      // Todo se maneja en la BD y en memoria durante la sesión; nada en localStorage.
-      if (cloudCustomers != null) {
-        customers
-          ..clear()
-          ..addAll(cloudCustomers);
-      }
-
-      if (cloudLicenses != null) {
-        records
-          ..clear()
-          ..addAll(cloudLicenses);
-      }
-
-      if (cloudAdmins != null && cloudAdmins.isNotEmpty) {
-        admins
-          ..clear()
-          ..addAll(cloudAdmins);
-      }
-
-      // Si hay sesión activa, verificar que el admin siga existiendo y activo
-      // en la BD. NO re-verificamos HMAC aquí para evitar invalidaciones
-      // por diferencias de hash entre memoria y Supabase.
-      if (unlocked && currentUser != null) {
-        final stillExists = admins.any(
-          (a) =>
-              a.email.trim().toLowerCase() == currentUser!.toLowerCase() &&
-              a.isActive,
-        );
-        if (!stillExists) {
-          // Admin eliminado o desactivado en la BD: revocar acceso
-          await _clearSessionToken();
-          unlocked = false;
-          currentUser = null;
-          currentRole = null;
-        }
-      }
+      customers
+        ..clear()
+        ..addAll(results[0] as List<CustomerRecord>);
+      records
+        ..clear()
+        ..addAll(results[1] as List<LicenseRecord>);
     } catch (e) {
       debugPrint('Error en syncWithCloud: $e');
     } finally {
       isSyncing = false;
     }
-  }
-
-  /// Hace recuperable una instalación limpia y agrega las cuentas temporales
-  /// faltantes en instalaciones de prueba existentes.
-  Future<void> _restoreTestAdminIfMissing() async {
-    if (prefs!.getBool(_testAdminsMigrationKey) == true) return;
-    var changed = false;
-    for (final testAdmin in _testAdmins) {
-      final index = admins.indexWhere(
-        (admin) => admin.email.toLowerCase() == testAdmin.email,
-      );
-      final previous = index >= 0 ? admins[index] : null;
-      final repaired = AdminAccount(
-        id: previous?.id,
-        email: testAdmin.email,
-        passwordHash: testAdmin.hash,
-        passwordSalt: testAdmin.salt,
-        role: 'super',
-        isActive: true,
-      );
-      if (index >= 0) {
-        admins[index] = repaired;
-      } else {
-        admins.add(repaired);
-      }
-      changed = true;
-    }
-    if (changed) await _saveAdmins();
-    await prefs!.setBool(_testAdminsMigrationKey, true);
   }
 
   // ignore: unused_element
@@ -965,7 +934,7 @@ class LicenseIssuer {
         email: email.trim().toLowerCase(),
         passwordHash: passwordHash,
         passwordSalt: passwordSalt,
-        role: 'super',
+        role: 'super_admin',
       ),
     );
     await prefs!.setStringList(
@@ -1014,176 +983,89 @@ class LicenseIssuer {
     );
   }
 
-  Future<bool> _verifyOfflinePassword(String email, String password) async {
-    final normalized = email.trim().toLowerCase();
-    final cleanPassword = password.trim();
-
-    if (!normalized.contains('@') || cleanPassword.isEmpty) return false;
-
-    AdminAccount? targetAdmin;
-    for (final a in admins) {
-      if (a.email.toLowerCase() == normalized) {
-        targetAdmin = a;
-        break;
-      }
-    }
-
-    if (targetAdmin != null &&
-        targetAdmin.passwordHash.isNotEmpty &&
-        (targetAdmin.passwordSalt ?? '').isNotEmpty) {
-      try {
-        final saltBytes = base64Url.decode(targetAdmin.passwordSalt!);
-        final expectedHash = base64Url.decode(targetAdmin.passwordHash);
-        final derivedHash = await _derivePin(password, saltBytes);
-        if (_constantTimeEquals(expectedHash, derivedHash)) return true;
-        final derivedHashTrim = await _derivePin(cleanPassword, saltBytes);
-        return _constantTimeEquals(expectedHash, derivedHashTrim);
-      } catch (_) {
-        return false;
-      }
-    }
-
-    // Estrictamente fail-closed. No existen contraseñas de prueba ni accesos por longitud.
-    return false;
-  }
-
+  /// Inicio de sesión con Supabase Auth. El rol y los permisos se leen de la
+  /// base de datos; no existe ninguna cuenta ni contraseña en el binario.
   Future<bool> login(String email, String password) async {
     final normalizedEmail = email.trim().toLowerCase();
-    final cleanPassword = password.trim();
-    if (!normalizedEmail.contains('@') || cleanPassword.isEmpty) {
-      return false;
+    if (!normalizedEmail.contains('@') || password.isEmpty) return false;
+    try {
+      await supabase.signIn(normalizedEmail, password);
+    } on SupabaseException catch (e) {
+      if (e.statusCode == 400 && e.message.contains('incorrectos')) return false;
+      rethrow;
     }
-
-    // La consola emisora es estrictamente offline: no depende de servidor,
-    // conectividad, ni tokens remotos para autenticar al operador.
-    var isValid = await _verifyOfflinePassword(normalizedEmail, password);
-    if (!isValid) {
-      try {
-        await syncWithCloud();
-        isValid = await _verifyOfflinePassword(normalizedEmail, password);
-      } catch (_) {}
-    }
-    if (isValid) {
-      unlocked = true;
-      await _resetFailures();
-      currentUser = normalizedEmail;
-      final currentAdmin = admins.firstWhere(
-        (a) => a.email.toLowerCase() == normalizedEmail,
-        orElse: () => AdminAccount(
-          email: normalizedEmail,
-          passwordHash: '',
-          role: 'super',
-          isActive: true,
-        ),
+    if (!await _loadCurrentAdmin()) {
+      await supabase.signOut();
+      throw StateError(
+        'Tu cuenta no tiene acceso a la consola o está desactivada. Contacta al Super Administrador.',
       );
-      currentRole = currentAdmin.role;
-
-      final sessionToken = _generateSessionToken(currentAdmin);
-      await prefs!.setString(_sessionTokenKey, sessionToken);
-      await prefs!.remove(_currentSessionEmailKey);
-      return true;
     }
-
-    return false;
+    unlocked = true;
+    await _resetFailures();
+    await syncWithCloud();
+    return true;
   }
 
-  Future<void> _saveAdmins() async {
-    await prefs?.remove(_adminsKey);
-  }
-
-  /// Crea el superadministrador de una instalación sin usuarios. Nunca guarda
-  /// la contraseña en claro y deja de estar disponible al registrar la primera
-  /// cuenta local.
+  /// Ya no se crean cuentas locales: el primer Super Administrador se define
+  /// en la base de datos (migración SQL) y se registra en Supabase Auth.
   Future<void> initializeInitialOwner({
     required String email,
     required String password,
   }) async {
-    if (admins.isNotEmpty) {
-      throw StateError('La cuenta inicial ya fue configurada.');
-    }
-    final normalizedEmail = email.trim().toLowerCase();
-    final cleanPassword = password.trim();
-    if (!normalizedEmail.contains('@') || cleanPassword.length < 12) {
-      throw ArgumentError(
-        'Indica un correo válido y una contraseña de al menos 12 caracteres.',
-      );
-    }
-
-    final salt = List<int>.generate(16, (_) => Random.secure().nextInt(256));
-    final hash = await _derivePin(cleanPassword, salt);
-    admins.add(
-      AdminAccount(
-        email: normalizedEmail,
-        passwordHash: base64UrlEncode(hash),
-        passwordSalt: base64UrlEncode(salt),
-        role: 'super',
-        isActive: true,
-      ),
+    throw StateError(
+      'La cuenta principal se configura en Supabase (ver supabase/README_RBAC.md).',
     );
-    await _saveAdmins();
-    await _resetFailures();
-    unlocked = true;
-    currentUser = normalizedEmail;
-    currentRole = 'super';
   }
 
   Future<void> addAdmin(String email, String password, {String role = 'operator', Map<String, Map<String, bool>>? permissions}) async {
-    final isCreator = (currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
+    _requirePermission('usuarios', 'create', 'No tienes permiso para crear usuarios.');
     final normalized = email.trim().toLowerCase();
-    final saltBytes = List<int>.generate(
-      16,
-      (_) => Random.secure().nextInt(256),
-    );
-    final derivedHash = await _derivePin(password, saltBytes);
-    final saltStr = base64UrlEncode(saltBytes);
-    final hashStr = base64UrlEncode(derivedHash);
-
-    // Solo el Creador principal puede asignar permisos personalizados.
-    final effectivePermissions = (isCreator && permissions != null)
-        ? permissions
-        : (role == 'super' ? AdminAccount.defaultPermissions() : AdminAccount.operatorPermissions());
-
-    final account = AdminAccount(
-      id: 'admin_${DateTime.now().millisecondsSinceEpoch}',
-      email: normalized,
-      passwordHash: hashStr,
-      passwordSalt: saltStr,
-      role: role,
-      isActive: true,
-      permissions: effectivePermissions,
-    );
-    final existingIdx = admins.indexWhere((a) => a.email.toLowerCase() == normalized);
-    if (existingIdx >= 0) {
-      admins[existingIdx] = account;
-    } else {
-      admins.add(account);
+    final cleanRole = AdminAccount.normalizeRole(role);
+    if (!normalized.contains('@')) {
+      throw ArgumentError('Indica un correo válido.');
     }
-    await _saveAdmins();
-    await supabase.syncAdmin(account);
+    if (password.length < 8) {
+      throw ArgumentError('La contraseña debe tener al menos 8 caracteres.');
+    }
+    if ((cleanRole == 'super_admin' || cleanRole == 'custom') && !isSuperAdmin) {
+      throw StateError('Solo el Super Administrador puede asignar ese rol.');
+    }
+    final account = AdminAccount(
+      id: normalized,
+      email: normalized,
+      role: cleanRole,
+      isActive: true,
+      permissions: cleanRole == 'custom' ? permissions : null,
+    );
+    // 1) Fila con el rol (RLS: usuarios.create). 2) Cuenta de acceso en Auth.
+    await supabase.insertAdmin(account);
+    try {
+      await supabase.signUpUser(normalized, password);
+    } on SupabaseException catch (e) {
+      // La fila queda creada: el usuario puede registrarse luego con su correo.
+      throw StateError(
+        'Rol asignado, pero no se pudo crear el acceso: ${e.message}',
+      );
+    }
+    await syncWithCloud();
   }
 
   Future<void> deleteAdmin(String id) async {
+    _requirePermission('usuarios', 'delete', 'No tienes permiso para eliminar usuarios.');
     final normalized = id.trim().toLowerCase();
-    if (normalized == 'david.zapata@bdjstudio.com' ||
-        admins.any((a) =>
-            (a.id?.toLowerCase() == normalized ||
-                a.email.toLowerCase() == normalized) &&
-            a.email.toLowerCase() == 'david.zapata@bdjstudio.com')) {
-      throw StateError(
-        'La cuenta de david.zapata@bdjstudio.com es el creador y Super Admin principal. No puede ser eliminada.',
-      );
-    }
     final target = admins.cast<AdminAccount?>().firstWhere(
-      (a) => a?.id == id || a?.email.toLowerCase() == normalized,
+      (a) => a?.id?.toLowerCase() == normalized || a?.email == normalized,
       orElse: () => null,
     );
-    admins.removeWhere((a) => a.id == id || a.email.toLowerCase() == normalized);
-    await _saveAdmins();
-    if (target != null) {
-      await supabase.deleteAdmin(target.email);
-    } else {
-      await supabase.deleteAdmin(normalized);
+    if (target == null) throw StateError('El usuario ya no existe.');
+    if (target.role == 'super_admin') {
+      throw StateError('Un Super Administrador no se puede eliminar.');
     }
+    if (target.email == currentUser) {
+      throw StateError('No puedes eliminar tu propia cuenta.');
+    }
+    await supabase.deleteAdmin(target.email);
+    await syncWithCloud();
   }
 
   Future<void> updateAdmin(
@@ -1192,116 +1074,50 @@ class LicenseIssuer {
     String? password,
     String? role,
     Map<String, Map<String, bool>>? permissions,
+    bool? isActive,
   }) async {
-    final isCreator = (currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
-    if ((permissions != null || role != null) && !isCreator) {
-      throw StateError('Solo el Creador principal (david.zapata@bdjstudio.com) puede modificar los permisos o roles de los administradores.');
+    _requirePermission('usuarios', 'update', 'No tienes permiso para editar usuarios.');
+    if ((permissions != null || role != null) && !isSuperAdmin) {
+      throw StateError('Solo el Super Administrador puede modificar roles o permisos.');
     }
-    final normalized = email.trim().toLowerCase();
-    final index = admins.indexWhere(
-      (admin) => admin.id == id || admin.email.toLowerCase() == id.toLowerCase(),
+    final key = id.trim().toLowerCase();
+    final previous = admins.cast<AdminAccount?>().firstWhere(
+      (a) => a?.id?.toLowerCase() == key || a?.email == key,
+      orElse: () => null,
     );
-    if (index >= 0) {
-      final previous = admins[index];
-      String hash = previous.passwordHash;
-      String salt = previous.passwordSalt ?? '';
-      if (password != null && password.isNotEmpty) {
-        final saltBytes = List<int>.generate(16, (_) => Random.secure().nextInt(256));
-        final derived = await _derivePin(password, saltBytes);
-        salt = base64UrlEncode(saltBytes);
-        hash = base64UrlEncode(derived);
-      }
-      final updated = AdminAccount(
-        id: previous.id ?? 'admin_${DateTime.now().millisecondsSinceEpoch}',
-        email: normalized,
-        passwordHash: hash,
-        passwordSalt: salt,
-        role: role ?? previous.role,
-        isActive: previous.isActive,
-        permissions: isCreator ? (permissions ?? previous.permissions) : previous.permissions,
-      );
-      admins[index] = updated;
-      await _saveAdmins();
-      await supabase.syncAdmin(updated);
-    }
+    if (previous == null) throw StateError('El usuario ya no existe.');
+    final newRole = AdminAccount.normalizeRole(role ?? previous.role);
+    final updated = AdminAccount(
+      id: previous.id,
+      email: email.trim().toLowerCase(),
+      role: newRole,
+      isActive: isActive ?? previous.isActive,
+      permissions: newRole == 'custom' ? (permissions ?? previous.permissions) : null,
+    );
+    await supabase.updateAdmin(previous.email, updated);
+    await syncWithCloud();
   }
 
+  /// Cambia la contraseña del usuario conectado (Supabase Auth). Restablecer
+  /// la de otra persona requiere la service key, así que se hace desde el
+  /// panel de Supabase (Authentication → Users).
   Future<bool> changeAdminPassword(
     String email,
     String? currentPassword,
     String newPassword,
   ) async {
     final normalized = email.trim().toLowerCase();
-    if (newPassword.trim().length < 6) {
-      throw ArgumentError(
-        'La nueva contraseña debe tener al menos 6 caracteres.',
+    if (newPassword.trim().length < 8) {
+      throw ArgumentError('La nueva contraseña debe tener al menos 8 caracteres.');
+    }
+    if (normalized != currentUser) {
+      throw StateError(
+        'Para restablecer la contraseña de otro usuario usa Supabase → Authentication → Users → "Send password recovery".',
       );
     }
-
-    final isCreator = (currentUser ?? '').toLowerCase() == 'david.zapata@bdjstudio.com';
-    final isSelf = (currentUser ?? '').toLowerCase() == normalized;
-
-    if (!isCreator && !isSelf) {
-      throw StateError('Solo el creador o el propio usuario pueden cambiar la contraseña.');
-    }
-
-    // Solo si el usuario está cambiando su propia contraseña se requiere validar la contraseña actual.
-    // El creador puede cambiar/restablecer la contraseña de cualquier usuario sin necesidad de saber la anterior.
-    if (isSelf) {
-      if (currentPassword == null || currentPassword.isEmpty) {
-        return false;
-      }
-      final isValidCurrent = await _verifyOfflinePassword(
-        normalized,
-        currentPassword,
-      );
-      if (!isValidCurrent) {
-        return false;
-      }
-    }
-
-    final saltBytes = List<int>.generate(
-      16,
-      (_) => Random.secure().nextInt(256),
-    );
-    final derivedHash = await _derivePin(newPassword.trim(), saltBytes);
-    final saltStr = base64UrlEncode(saltBytes);
-    final hashStr = base64UrlEncode(derivedHash);
-
-    final index = admins.indexWhere((a) => a.email.toLowerCase() == normalized);
-    if (index != -1) {
-      admins[index] = AdminAccount(
-        id: admins[index].id,
-        email: admins[index].email,
-        passwordHash: hashStr,
-        passwordSalt: saltStr,
-        role: admins[index].role,
-        isActive: admins[index].isActive,
-      );
-    } else {
-      admins.add(
-        AdminAccount(
-          email: normalized,
-          passwordHash: hashStr,
-          passwordSalt: saltStr,
-          role: 'super',
-          isActive: true,
-        ),
-      );
-    }
-    await _saveAdmins();
-    final updatedAdmin = admins.firstWhere((a) => a.email.toLowerCase() == normalized);
-    try {
-      await supabase.syncAdmin(updatedAdmin);
-    } catch (_) {}
-
-    // Si el usuario actual cambió su propia contraseña, regenerar el token
-    // de sesión para que la firma HMAC use el hash nuevo.
-    if (currentUser?.toLowerCase() == normalized) {
-      final newToken = _generateSessionToken(updatedAdmin);
-      await prefs!.setString(_sessionTokenKey, newToken);
-    }
-
+    if (currentPassword == null || currentPassword.isEmpty) return false;
+    if (!await supabase.verifyPassword(normalized, currentPassword)) return false;
+    await supabase.updateOwnPassword(newPassword.trim());
     return true;
   }
 
@@ -1373,7 +1189,7 @@ class LicenseIssuer {
             await _derivePin(password, accountSalt),
           ),
           passwordSalt: base64UrlEncode(accountSalt),
-          role: 'super',
+          role: 'super_admin',
         ),
       );
     await prefs!.setStringList(
@@ -1387,11 +1203,8 @@ class LicenseIssuer {
   }
 
   Future<void> logout() async {
-    unlocked = false;
-    currentUser = null;
-    currentRole = null;
-    await prefs?.remove(_sessionTokenKey);
-    await prefs?.remove(_currentSessionEmailKey);
+    await supabase.signOut();
+    _clearIdentity();
   }
 
   Future<CustomerRecord> getOrCreateCustomer(
@@ -1411,7 +1224,7 @@ class LicenseIssuer {
     }
 
     // Un cliente puede adquirir licencias para varios equipos. Cada registro
-    // local representa un equipo concreto, por lo que el correo NO identifica
+    // representa un equipo concreto, por lo que el correo NO identifica
     // por sí solo al registro: solo el ID físico evita duplicados.
     final existingIndex = customers.indexWhere(
       (c) => _samePhysicalDevice(c.device, normalizedDevice),
@@ -1419,14 +1232,14 @@ class LicenseIssuer {
 
     if (existingIndex >= 0) {
       final existing = customers[existingIndex];
-      // Si el equipo ya está registrado, no se emiten cuentas ni licencias
-      // duplicadas. Un correo repetido con OTRO ID crea un segundo dispositivo.
       final isLegacyDeviceId = RegExp(
         r'^V[1-9]\d*-[A-Z0-9-]+$',
       ).hasMatch(existing.device.toUpperCase());
       if ((_samePhysicalDevice(existing.device, normalizedDevice) ||
               isLegacyDeviceId) &&
-          existing.device != normalizedDevice) {
+          existing.device != normalizedDevice &&
+          canDo('gestion', 'update')) {
+        // Migración de ID antiguo → actual (requiere permiso de actualizar).
         final migrated = CustomerRecord(
           id: existing.id,
           name: existing.name,
@@ -1434,22 +1247,16 @@ class LicenseIssuer {
           device: normalizedDevice,
           createdAt: existing.createdAt,
         );
+        await supabase.updateCustomer(migrated);
         customers[existingIndex] = migrated;
-        try {
-          await supabase.syncCustomer(migrated);
-        } catch (_) {}
-        await _enqueueSync('/issuer/customers/sync', {
-          'externalId': migrated.id,
-          'name': migrated.name,
-          'email': migrated.email,
-          'deviceId': migrated.device,
-        }, flushNow: flushSync);
         return migrated;
       }
       return existing;
     }
 
-    // 2. Si es un cliente nuevo, si no se especifican nombre o correo se asignan por defecto según el ID del dispositivo
+    _requirePermission('gestion', 'create', 'No tienes permiso para crear clientes.');
+
+    // Si no se especifican nombre o correo se asignan por defecto según el ID
     final resolvedName = normalizedName.isNotEmpty
         ? normalizedName
         : 'Dispositivo ${_shortDeviceId(normalizedDevice)}';
@@ -1458,23 +1265,15 @@ class LicenseIssuer {
         ? normalizedEmail
         : 'device_${normalizedDevice.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase()}@bdjstudio.local';
 
-    var newCustomer = CustomerRecord(
+    final newCustomer = CustomerRecord(
       id: _randomId(),
       name: resolvedName,
       email: resolvedEmail,
       device: normalizedDevice,
       createdAt: DateTime.now().toUtc(),
     );
+    await supabase.insertCustomer(newCustomer);
     customers.add(newCustomer);
-    try {
-      await supabase.syncCustomer(newCustomer);
-    } catch (_) {}
-    await _enqueueSync('/issuer/customers/sync', {
-      'externalId': newCustomer.id,
-      'name': newCustomer.name,
-      'email': newCustomer.email,
-      'deviceId': newCustomer.device,
-    }, flushNow: flushSync);
     return newCustomer;
   }
 
@@ -1488,9 +1287,7 @@ class LicenseIssuer {
   }
 
   Future<void> deleteCustomer(String customerId) async {
-    if (!canDo('gestion', 'delete')) {
-      throw StateError('No tienes permiso para eliminar clientes.');
-    }
+    _requirePermission('gestion', 'delete', 'No tienes permiso para eliminar clientes.');
 
     final targetCustomer = customers.cast<CustomerRecord?>().firstWhere(
       (c) => c?.id == customerId,
@@ -1498,36 +1295,20 @@ class LicenseIssuer {
     );
     final targetDevice = targetCustomer?.device.trim();
 
-    // Eliminamos localmente las licencias asociadas al cliente y/o su dispositivo
+    await supabase.deleteCustomer(customerId, device: targetDevice);
+
     records.removeWhere((r) =>
         r.customerId == customerId ||
         (targetDevice != null &&
             targetDevice.isNotEmpty &&
             r.device.trim().toLowerCase() == targetDevice.toLowerCase()));
-    await _saveLicenseRecords();
-
     customers.removeWhere((customer) => customer.id == customerId);
-    try {
-      await supabase.deleteCustomer(customerId, device: targetDevice);
-    } catch (_) {}
-
-    // En backend se borran en cascada las licencias vinculadas en una sola petición.
-    await _enqueueSync(
-      '/issuer/customers/${Uri.encodeComponent(customerId)}',
-      const {},
-      method: 'DELETE',
-    );
   }
 
   Future<void> deleteLicense(String licenseId) async {
-    if (!canDo('gestion', 'delete')) {
-      throw StateError('No tienes permiso para eliminar licencias.');
-    }
+    _requirePermission('gestion', 'delete', 'No tienes permiso para eliminar licencias.');
+    await supabase.deleteLicense(licenseId);
     records.removeWhere((r) => r.id == licenseId);
-    await _saveLicenseRecords();
-    try {
-      await supabase.deleteLicense(licenseId);
-    } catch (_) {}
   }
 
   Future<void> updateCustomer(
@@ -1536,9 +1317,7 @@ class LicenseIssuer {
     required String email,
     required String device,
   }) async {
-    if (!canDo('gestion', 'update')) {
-      throw StateError('No tienes permiso para editar clientes.');
-    }
+    _requirePermission('gestion', 'update', 'No tienes permiso para editar clientes.');
     if (name.trim().isEmpty ||
         !email.contains('@') ||
         device.trim().length < 8) {
@@ -1548,46 +1327,35 @@ class LicenseIssuer {
     }
     final index = customers.indexWhere((customer) => customer.id == customerId);
     if (index < 0) throw StateError('El cliente ya no existe.');
-    final normalizedEmail = email.trim().toLowerCase();
-    final normalizedDevice = device.trim();
     final current = customers[index];
     final newName = name.trim();
-    customers[index] = CustomerRecord(
+    final updated = CustomerRecord(
       id: current.id,
       name: newName,
-      email: normalizedEmail,
-      device: normalizedDevice,
+      email: email.trim().toLowerCase(),
+      device: device.trim(),
       createdAt: current.createdAt,
     );
+    await supabase.updateCustomer(updated);
+    customers[index] = updated;
     // Propagar el nuevo nombre a las licencias de este cliente
     for (var i = 0; i < records.length; i++) {
       if (records[i].customerId == customerId &&
           records[i].customerName != newName) {
+        await supabase.patchLicense(records[i].id, {'customer_name': newName});
         records[i] = records[i].copyWith(customerName: newName);
       }
     }
-    try {
-      await supabase.syncCustomer(customers[index]);
-    } catch (_) {}
-    await _enqueueSync('/issuer/customers/sync', {
-      'externalId': current.id,
-      'name': newName,
-      'email': normalizedEmail,
-      'deviceId': normalizedDevice,
-    });
   }
 
   /// Deja exactamente los productos seleccionados para un dispositivo. Las
-  /// licencias retiradas se eliminan localmente y se propagan al servidor.
+  /// licencias retiradas se eliminan (requiere permiso de eliminar).
   Future<void> setProductAccess({
     required String customerId,
     required String device,
     required Set<String> products,
     bool flushSync = true,
   }) async {
-    if (!canDo('gestion', 'update')) {
-      throw StateError('No tienes permiso para gestionar accesos.');
-    }
     final removed = records
         .where(
           (record) =>
@@ -1598,68 +1366,14 @@ class LicenseIssuer {
         )
         .toList();
     if (removed.isEmpty) return;
-    records.removeWhere(
-      (record) => removed.any((item) => item.id == record.id),
-    );
-    await _saveLicenseRecords();
+    _requirePermission('gestion', 'delete', 'No tienes permiso para retirar licencias.');
     for (final rem in removed) {
-      try {
-        await supabase.deleteLicense(rem.id);
-      } catch (_) {}
-    }
-    for (var index = 0; index < removed.length; index++) {
-      await _enqueueSync(
-        '/issuer/licenses/${Uri.encodeComponent(removed[index].id)}',
-        const {},
-        method: 'DELETE',
-        flushNow: flushSync && index == removed.length - 1,
-      );
+      await supabase.deleteLicense(rem.id);
+      records.removeWhere((record) => record.id == rem.id);
     }
   }
 
 
-  // ignore: unused_element
-  Future<void> _legacyAddAdminLocal(String email, String password) async {
-    if (!canDo('admins', 'create')) {
-      throw StateError('No tienes permiso para crear usuarios.');
-    }
-    final normalizedEmail = email.trim().toLowerCase();
-    if (!normalizedEmail.contains('@') || password.length < 8) {
-      throw ArgumentError(
-        'Correo valido y contrasena de 8 caracteres requeridos.',
-      );
-    }
-    if (admins.any((admin) => admin.email == normalizedEmail)) {
-      throw StateError('El usuario ya existe.');
-    }
-    final random = Random.secure();
-    final salt = List<int>.generate(16, (_) => random.nextInt(256));
-    final passwordHash = await _derivePin(password, salt);
-    admins.add(
-      AdminAccount(
-        email: normalizedEmail,
-        passwordHash: base64UrlEncode(passwordHash),
-        passwordSalt: base64UrlEncode(salt),
-        role: 'super',
-      ),
-    );
-    await prefs!.setStringList(
-      _adminsKey,
-      admins.map((item) => jsonEncode(item.toJson())).toList(),
-    );
-  }
-
-  // ignore: unused_element
-  Future<void> _legacyDeleteAdmin(String email) async {
-    if (!canDo('admins', 'delete')) {
-      throw StateError('No tienes permiso para eliminar usuarios.');
-    }
-    admins.removeWhere((admin) => admin.email == email.toLowerCase());
-    await prefs!.setStringList(
-      _adminsKey,
-      admins.map((item) => jsonEncode(item.toJson())).toList(),
-    );
-  }
 
   Future<void> configure(String pin) async {
     if (pin.length < 8) {
@@ -1731,6 +1445,7 @@ class LicenseIssuer {
     if (!unlocked || privateKey.isEmpty || publicKey.isEmpty) {
       throw StateError('Inicia sesión para generar licencias.');
     }
+    _requirePermission('gestion', 'create', 'No tienes permiso para crear licencias.');
     final normalizedDevice = device.trim();
     if (normalizedDevice.length < 8 || normalizedDevice.length > 256) {
       throw ArgumentError('El ID de dispositivo no es valido.');
@@ -1842,28 +1557,31 @@ class LicenseIssuer {
     final token = await generateSpp3TokenForRecord(tempRecord);
     final newRecord = tempRecord.copyWith(token: token);
 
-    records.removeWhere(
-      (record) =>
-          (record.customerId == customerId ||
-              _samePhysicalDevice(record.device, normalizedDevice)) &&
-          record.product == product,
-    );
-    records.add(newRecord);
-    await _saveLicenseRecords();
-    try {
-      await supabase.syncLicense(newRecord);
-    } catch (_) {}
-    await _enqueueSync('/issuer/licenses/sync', {
-      'externalId': newRecord.id,
-      'customerExternalId': customer.id,
-      'product': newRecord.product,
-      'deviceId': newRecord.device,
-      'plan': newRecord.plan,
-      'tokenDigest': crypto.sha256.convert(utf8.encode(token)).toString(),
-      'issuedAt': newRecord.issuedAt.toIso8601String(),
-      'expiresAt': newRecord.expiresAt?.toIso8601String(),
-      'status': newRecord.status,
-    }, flushNow: flushSync);
+    // Reemplazar una licencia vigente del mismo producto es una ACTUALIZACIÓN:
+    // exige permiso de actualizar (el operador solo puede crear nuevas).
+    final replaced = records
+        .where(
+          (record) =>
+              record.isActive &&
+              (record.customerId == customerId ||
+                  _samePhysicalDevice(record.device, normalizedDevice)) &&
+              record.product == product,
+        )
+        .toList();
+    if (replaced.isNotEmpty) {
+      _requirePermission(
+        'gestion',
+        'update',
+        'Este equipo ya tiene una licencia activa de ${newRecord.productLabel}. '
+            'Solo un administrador puede renovarla o cambiar su plan.',
+      );
+    }
+    await supabase.insertLicense(newRecord);
+    for (final old in replaced) {
+      await supabase.patchLicense(old.id, {'status': 'replaced'});
+    }
+    records.removeWhere((record) => replaced.any((old) => old.id == record.id));
+    records.add(newRecord.copyWith(issuedBy: currentUser));
     return token;
   }
 
@@ -1898,19 +1616,13 @@ class LicenseIssuer {
     return token;
   }
 
-  Future<void> _enqueueSync(
-    String path,
-    Map<String, Object?> body, {
-    String method = 'POST',
-    bool flushNow = true,
-  }) async {}
-
   Future<String> replaceLicense(
     LicenseRecord current,
     LicensePlan newPlan, {
     int? customDays,
     bool flushSync = true,
   }) async {
+    _requirePermission('gestion', 'update', 'No tienes permiso para renovar o editar licencias.');
     if (current.customerId == null || current.customerName == null) {
       throw StateError(
         'Esta licencia antigua no tiene un cliente asociado y no puede editarse.',
@@ -1930,10 +1642,6 @@ class LicenseIssuer {
       forceNew: true,
       extendFromExpiry: current.expiresAt,
     );
-  }
-
-  Future<void> _saveLicenseRecords() async {
-    await prefs?.remove(_recordsKey);
   }
 
   // ignore: unused_element
@@ -2218,154 +1926,128 @@ class AdminAccount {
   const AdminAccount({
     this.id,
     required this.email,
-    required this.passwordHash,
+    this.passwordHash = '',
     this.passwordSalt,
     required this.role,
     this.isActive = true,
     this.permissions,
+    this.userId,
   });
 
   final String? id;
   final String email;
+  /// Obsoleto: las contraseñas viven en Supabase Auth. Se conserva solo para
+  /// compatibilidad con el flujo de bootstrap heredado.
   final String passwordHash;
   final String? passwordSalt;
+  /// Id del rol en la tabla `roles` (super_admin, license_admin, operator,
+  /// auditor, custom o un rol personalizado).
   final String role;
   final bool isActive;
+  /// Solo se usa cuando role == 'custom'.
   final Map<String, Map<String, bool>>? permissions;
+  final String? userId;
 
   /// Módulos disponibles en el sistema.
-  static const availableModules = ['gestion', 'admins'];
+  static const availableModules = ['gestion', 'usuarios'];
 
   /// Acciones CRUD disponibles.
   static const availableActions = ['create', 'read', 'update', 'delete'];
 
-  /// Permisos por defecto: acceso total a todo (Super Admin).
-  static Map<String, Map<String, bool>> defaultPermissions() => {
-    for (final module in availableModules)
-      module: {
-        for (final action in availableActions) action: true,
-      },
-  };
+  /// Unifica alias antiguos ('super', 'Super Admin') con los ids de la BD.
+  static String normalizeRole(String? raw) {
+    final r = (raw ?? '').trim();
+    if (r == 'super' || r == 'super_admin' || r == 'Super Admin') return 'super_admin';
+    if (r.isEmpty) return 'operator';
+    return r;
+  }
 
-  /// Permisos para Operador de Gestión (solo crear y buscar licencias, cero acceso a admins ni borrado).
-  static Map<String, Map<String, bool>> operatorPermissions() => {
-    'gestion': {'create': true, 'read': true, 'update': false, 'delete': false},
-    'admins': {'create': false, 'read': false, 'update': false, 'delete': false},
-  };
+  static Map<String, Map<String, bool>> _copy(Map<String, Map<String, bool>> src) =>
+      src.map((k, v) => MapEntry(k, Map<String, bool>.from(v)));
+
+  /// Permisos por defecto: acceso total a todo (Super Admin).
+  static Map<String, Map<String, bool>> defaultPermissions() =>
+      _copy(AppRole.superAdmin.permissions);
+
+  /// Permisos para Operador de Licencias.
+  static Map<String, Map<String, bool>> operatorPermissions() =>
+      _copy(AppRole.operator.permissions);
+
+  /// Permisos para Auditor.
+  static Map<String, Map<String, bool>> auditorPermissions() =>
+      _copy(AppRole.auditor.permissions);
+
+  bool get isSuperAdmin => role == 'super_admin';
 
   /// Etiqueta legible del rol.
   String get displayRole {
-    if (email.trim().toLowerCase() == 'david.zapata@bdjstudio.com') {
-      return 'Creador';
+    switch (role) {
+      case 'super_admin':
+        return 'Super Administrador';
+      case 'license_admin':
+        return 'Administrador de Licencias';
+      case 'operator':
+        return 'Operador de Licencias';
+      case 'auditor':
+        return 'Auditor';
+      default:
+        return 'Personalizado';
     }
-    if (role == 'super') return 'Super Admin';
-    if (role == 'operator') return 'Operador';
-    return 'Personalizado';
   }
 
-  /// Verifica si el admin tiene permiso para una acción en un módulo.
+  /// Aproximación local (solo UI) usando los roles de sistema. La consola usa
+  /// LicenseIssuer.canDo, que toma los roles reales cargados desde la BD.
   bool hasPermission(String module, String action) {
-    if (role == 'super') return true;
-    if (permissions == null) return true; // Sin permisos definidos = acceso total
-    final modulePerms = permissions![module];
-    if (modulePerms == null) return false;
-    return modulePerms[action] ?? false;
+    if (role == 'super_admin') return true;
+    final m = (module == 'admins') ? 'usuarios' : module;
+    if (role == 'custom') {
+      return permissions?[m]?[action] ?? false;
+    }
+    for (final r in AppRole.systemRoles) {
+      if (r.id == role) return r.hasPermission(m, action);
+    }
+    return false;
   }
 
-  factory AdminAccount.fromJson(Map<String, dynamic> json) {
-    Map<String, Map<String, bool>>? perms;
-    if (json['permissions'] != null) {
-      final raw = json['permissions'];
-      if (raw is Map) {
-        perms = {};
-        for (final entry in raw.entries) {
-          final moduleMap = entry.value;
-          if (moduleMap is Map) {
-            perms[entry.key.toString()] = {
-              for (final e in moduleMap.entries)
-                e.key.toString(): e.value == true,
-            };
-          }
-        }
+  static Map<String, Map<String, bool>>? _parsePermissions(Object? raw) {
+    if (raw is! Map) return null;
+    final perms = <String, Map<String, bool>>{};
+    for (final entry in raw.entries) {
+      if (entry.value is Map) {
+        perms[entry.key.toString()] = {
+          for (final e in (entry.value as Map).entries)
+            e.key.toString(): e.value == true,
+        };
       }
     }
-    final r = json['role'] as String? ?? 'super';
-    if (perms == null) {
-      if (r == 'operator') {
-        perms = operatorPermissions();
-      } else if (r == 'super') {
-        perms = defaultPermissions();
-      }
-    }
-    return AdminAccount(
-      id: json['id'] as String?,
-      email: json['email'] as String,
-      passwordHash: json['passwordHash'] as String,
-      passwordSalt: json['passwordSalt'] as String?,
-      role: r,
-      isActive: json['isActive'] as bool? ?? true,
-      permissions: perms,
-    );
+    return perms;
   }
 
-  factory AdminAccount.fromRemote(Map<dynamic, dynamic> json) {
-    final roleRaw = json['role'] as String? ?? 'super';
-    String cleanRole = roleRaw;
-    Map<String, Map<String, bool>>? perms;
+  factory AdminAccount.fromJson(Map<String, dynamic> json) => AdminAccount(
+        id: json['id'] as String?,
+        email: (json['email'] as String).trim().toLowerCase(),
+        passwordHash: json['passwordHash'] as String? ?? '',
+        passwordSalt: json['passwordSalt'] as String?,
+        role: normalizeRole(json['role'] as String?),
+        isActive: json['isActive'] as bool? ?? true,
+        permissions: _parsePermissions(json['permissions']),
+      );
 
-    if (json['permissions'] != null && json['permissions'] is Map) {
-      final raw = json['permissions'] as Map;
-      perms = {};
-      for (final entry in raw.entries) {
-        final moduleMap = entry.value;
-        if (moduleMap is Map) {
-          perms[entry.key.toString()] = {
-            for (final e in moduleMap.entries)
-              e.key.toString(): e.value == true,
-          };
-        }
-      }
-    } else if (roleRaw.startsWith('custom:')) {
-      cleanRole = 'custom';
-      try {
-        final decoded = jsonDecode(roleRaw.substring(7));
-        if (decoded is Map) {
-          perms = {};
-          for (final entry in decoded.entries) {
-            if (entry.value is Map) {
-              perms[entry.key.toString()] = {
-                for (final e in (entry.value as Map).entries)
-                  e.key.toString(): e.value == true,
-              };
-            }
-          }
-        }
-      } catch (_) {}
-    } else if (roleRaw == 'operator') {
-      cleanRole = 'operator';
-      perms = operatorPermissions();
-    } else if (roleRaw == 'super') {
-      cleanRole = 'super';
-      perms = defaultPermissions();
-    }
-
-    return AdminAccount(
-      id: json['id'] as String?,
-      email: json['email'] as String,
-      passwordHash: '',
-      role: cleanRole,
-      isActive: json['is_active'] ?? json['isActive'] ?? true,
-      permissions: perms,
-    );
-  }
+  /// Fila de la tabla admin_accounts de Supabase.
+  factory AdminAccount.fromRemote(Map<dynamic, dynamic> json) => AdminAccount(
+        id: json['id'] as String?,
+        email: (json['email'] as String).trim().toLowerCase(),
+        role: normalizeRole(json['role'] as String?),
+        isActive: json['is_active'] as bool? ?? true,
+        permissions: _parsePermissions(json['permissions']),
+        userId: json['user_id'] as String?,
+      );
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'email': email,
-    'passwordHash': passwordHash,
-    'passwordSalt': passwordSalt,
-    'role': role,
-    'isActive': isActive,
-    'permissions': permissions,
-  };
+        'id': id,
+        'email': email,
+        'role': role,
+        'isActive': isActive,
+        'permissions': permissions,
+      };
 }

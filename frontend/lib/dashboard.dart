@@ -90,7 +90,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
           ),
         ],
       ),
-      bottomNavigationBar: wide || !widget.issuer.canDo('admins', 'read')
+      bottomNavigationBar: wide || !widget.issuer.canDo('usuarios', 'read')
           ? null
           : NavigationBar(
               selectedIndex: selectedSection,
@@ -103,7 +103,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                 ),
                 NavigationDestination(
                   icon: Icon(CupertinoIcons.person_crop_circle_badge_checkmark),
-                  label: 'Administradores',
+                  label: 'Usuarios',
                 ),
               ],
             ),
@@ -111,23 +111,23 @@ extension _LicenseDashboardView on _LicenseHomeState {
   }
 
   Widget _dashboardSidebar() {
-    final canAdmins = widget.issuer.canDo('admins', 'read');
-    final isCreator = (widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com';
-    final currentAdmin = widget.issuer.admins.cast<AdminAccount?>().firstWhere(
-      (a) => a?.email.trim().toLowerCase() == (widget.issuer.currentUser ?? '').trim().toLowerCase(),
-      orElse: () => null,
-    );
-
+    final canUsers = widget.issuer.canDo('usuarios', 'read');
+    final isCreator = widget.issuer.isSuperAdmin;
+    final currentAdmin = widget.issuer.currentAdmin;
     final roleTitle = isCreator
-        ? 'Creador'
-        : (currentAdmin?.displayRole ?? (widget.issuer.currentRole == 'super' ? 'Super Admin' : 'Operador'));
+        ? 'Super Administrador'
+        : (currentAdmin == null
+            ? 'Sin rol'
+            : (widget.issuer.findRole(currentAdmin.role).id == currentAdmin.role
+                ? widget.issuer.findRole(currentAdmin.role).name
+                : currentAdmin.displayRole));
     final roleSubtitle = isCreator
         ? 'Control total (Protegido)'
-        : (currentAdmin?.role == 'super'
-            ? 'Acceso total'
-            : (currentAdmin?.role == 'operator'
-                ? 'Solo Gestión'
-                : 'Acceso Personalizado'));
+        : (widget.issuer.canDo('gestion', 'update') || widget.issuer.canDo('gestion', 'delete')
+            ? 'Gestión de licencias'
+            : (widget.issuer.canDo('gestion', 'create')
+                ? 'Crear y buscar licencias'
+                : 'Solo lectura'));
 
     return Container(
       width: 250,
@@ -154,7 +154,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
               ),
             ),
           ),
-          if (canAdmins)
+          if (canUsers)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Material(
@@ -166,7 +166,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   leading: const Icon(CupertinoIcons.person_crop_circle_badge_checkmark),
-                  title: const Text('Administradores'),
+                  title: const Text('Usuarios'),
                   onTap: () => updateDashboard(() => selectedSection = 1),
                 ),
               ),
@@ -199,7 +199,7 @@ extension _LicenseDashboardView on _LicenseHomeState {
   }
 
   Widget _dashboardSection() {
-    if (selectedSection == 1 && !widget.issuer.canDo('admins', 'read')) {
+    if (selectedSection == 1 && !widget.issuer.canDo('usuarios', 'read')) {
       return _managementPage();
     }
     return switch (selectedSection) {
@@ -320,16 +320,18 @@ extension _LicenseDashboardView on _LicenseHomeState {
                 runSpacing: 10,
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  OutlinedButton.icon(
-                    onPressed: _exportFullBackupJson,
-                    icon: const Icon(CupertinoIcons.arrow_down_doc, size: 16),
-                    label: const Text('Exportar Respaldo'),
-                  ),
-                  FilledButton.icon(
-                    onPressed: () => _showCustomerLicenseModal(),
-                    icon: const Icon(CupertinoIcons.add),
-                    label: const Text('Nueva licencia'),
-                  ),
+                  if (widget.issuer.isSuperAdmin)
+                    OutlinedButton.icon(
+                      onPressed: _exportFullBackupJson,
+                      icon: const Icon(CupertinoIcons.arrow_down_doc, size: 16),
+                      label: const Text('Exportar Respaldo'),
+                    ),
+                  if (widget.issuer.canDo('gestion', 'create'))
+                    FilledButton.icon(
+                      onPressed: () => _showCustomerLicenseModal(),
+                      icon: const Icon(CupertinoIcons.add),
+                      label: const Text('Nueva licencia'),
+                    ),
                 ],
               );
               if (narrow) {
@@ -1241,13 +1243,14 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     title: Text('Ver / Copiar Claves de Licencias'),
                   ),
                 ),
-              const PopupMenuItem(
-                value: 'manage',
-                child: ListTile(
-                  leading: Icon(CupertinoIcons.slider_horizontal_3),
-                  title: Text('Gestionar cliente y licencias'),
+              if (widget.issuer.canDo('gestion', 'update'))
+                const PopupMenuItem(
+                  value: 'manage',
+                  child: ListTile(
+                    leading: Icon(CupertinoIcons.slider_horizontal_3),
+                    title: Text('Gestionar cliente y licencias'),
+                  ),
                 ),
-              ),
               if (widget.issuer.canDo('gestion', 'delete'))
                 const PopupMenuItem(
                   value: 'deleteCustomer',
@@ -1798,367 +1801,654 @@ extension _LicenseDashboardView on _LicenseHomeState {
     );
   }
 
-  Widget _usersPage() => _dashboardPage(
-    title: 'Administradores',
-    subtitle:
-        'Usuarios internos con acceso al panel de emisión de licencias.',
-    children: [
-      _dashboardPanel(
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Wrap(
-              crossAxisAlignment: WrapCrossAlignment.center,
-              runSpacing: 8,
-              children: [
-                Icon(
-                  CupertinoIcons.person_crop_circle_badge_plus,
-                  color: Color(0xFF00E5FF),
-                ),
-                SizedBox(width: 10),
-                Text(
-                  'Crear Administrador',
-                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final narrow = constraints.maxWidth < 700;
-                final fullWidth = narrow ? constraints.maxWidth : null;
-                return Wrap(
-                  spacing: 14,
-                  runSpacing: 14,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: fullWidth ?? 330,
-                      child: TextField(
-                        controller: adminEmail,
-                        keyboardType: TextInputType.emailAddress,
-                        decoration: const InputDecoration(
-                          labelText: 'Correo',
-                          prefixIcon: Icon(CupertinoIcons.mail_solid),
-                        ),
+  Widget _usersPage() {
+    final isCreator = widget.issuer.isSuperAdmin;
+    final activeCount = widget.issuer.admins.where((a) => a.isActive).length;
+    final rolesCount = widget.issuer.allRoles.length;
+
+    return _dashboardPage(
+      title: 'Usuarios y Roles',
+      subtitle: 'Control de acceso basado en roles (RBAC) y gestión de usuarios del sistema.',
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 20),
+          child: Row(
+            children: [
+              FilterChip(
+                avatar: const Icon(CupertinoIcons.person_2_fill, size: 16),
+                label: Text('Usuarios ($activeCount)'),
+                selected: usersSubTab == 0,
+                onSelected: (val) {
+                  if (val) updateDashboard(() => usersSubTab = 0);
+                },
+                selectedColor: const Color(0xFF2A3050),
+                checkmarkColor: Colors.cyanAccent,
+              ),
+              const SizedBox(width: 10),
+              FilterChip(
+                avatar: const Icon(CupertinoIcons.shield_lefthalf_fill, size: 16),
+                label: Text('Roles y Permisos ($rolesCount)'),
+                selected: usersSubTab == 1,
+                onSelected: (val) {
+                  if (val) updateDashboard(() => usersSubTab = 1);
+                },
+                selectedColor: const Color(0xFF2A3050),
+                checkmarkColor: Colors.cyanAccent,
+              ),
+            ],
+          ),
+        ),
+        if (usersSubTab == 0) ...[
+          _buildUserCreationPanel(isCreator),
+          const SizedBox(height: 18),
+          _buildUsersListPanel(isCreator),
+        ] else ...[
+          _buildRolesAndPermissionsPanel(isCreator),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildUserCreationPanel(bool isCreator) {
+    return _dashboardPanel(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            runSpacing: 8,
+            children: [
+              Icon(
+                CupertinoIcons.person_crop_circle_badge_plus,
+                color: Color(0xFF00E5FF),
+              ),
+              SizedBox(width: 10),
+              Text(
+                'Crear Usuario',
+                style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final narrow = constraints.maxWidth < 700;
+              final fullWidth = narrow ? constraints.maxWidth : null;
+              return Wrap(
+                spacing: 14,
+                runSpacing: 14,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: fullWidth ?? 330,
+                    child: TextField(
+                      controller: adminEmail,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Correo',
+                        prefixIcon: Icon(CupertinoIcons.mail_solid),
                       ),
                     ),
-                    SizedBox(
-                      width: fullWidth ?? 300,
-                      child: TextField(
-                        controller: adminPassword,
-                        obscureText: obscureAdminPassword,
-                        enableSuggestions: false,
-                        autocorrect: false,
-                        decoration: InputDecoration(
-                          labelText: 'Contrase\u00f1a',
-                          prefixIcon: const Icon(CupertinoIcons.lock_fill),
-                          suffixIcon: IconButton(
-                            tooltip: obscureAdminPassword
-                                ? 'Mostrar clave'
-                                : 'Ocultar clave',
-                            icon: Icon(
-                              obscureAdminPassword
-                                  ? CupertinoIcons.eye_slash
-                                  : CupertinoIcons.eye,
-                            ),
-                            onPressed: () => updateDashboard(
-                              () =>
-                                  obscureAdminPassword = !obscureAdminPassword,
-                            ),
+                  ),
+                  SizedBox(
+                    width: fullWidth ?? 300,
+                    child: TextField(
+                      controller: adminPassword,
+                      obscureText: obscureAdminPassword,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      decoration: InputDecoration(
+                        labelText: 'Contraseña',
+                        prefixIcon: const Icon(CupertinoIcons.lock_fill),
+                        suffixIcon: IconButton(
+                          tooltip: obscureAdminPassword ? 'Mostrar clave' : 'Ocultar clave',
+                          icon: Icon(
+                            obscureAdminPassword ? CupertinoIcons.eye_slash : CupertinoIcons.eye,
+                          ),
+                          onPressed: () => updateDashboard(
+                            () => obscureAdminPassword = !obscureAdminPassword,
                           ),
                         ),
                       ),
                     ),
-                    if ((widget.issuer.currentUser ?? '').trim().toLowerCase() == 'david.zapata@bdjstudio.com')
-                      SizedBox(
-                        width: fullWidth ?? 600,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Tipo de Usuario / Rol',
-                              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.amberAccent),
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                ChoiceChip(
-                                  selected: selectedNewAdminRole == 'operator',
-                                  label: const Text('Operador de Gestión (Colaborador)'),
-                                  avatar: const Icon(CupertinoIcons.person_badge_plus, size: 16),
-                                  selectedColor: const Color(0xFF1E3A2B),
-                                  checkmarkColor: const Color(0xFF30D158),
+                  ),
+                  if (isCreator)
+                    SizedBox(
+                      width: fullWidth ?? 600,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Rol Asignado (RBAC)',
+                            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.amberAccent),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              ...widget.issuer.allRoles.map((role) {
+                                final isSelected = selectedNewAdminRole == role.id ||
+                                    (selectedNewAdminRole == 'super' && role.id == 'super_admin');
+                                return ChoiceChip(
+                                  selected: isSelected,
+                                  label: Text(role.name),
+                                  avatar: Icon(
+                                    role.id.contains('super')
+                                        ? CupertinoIcons.shield_fill
+                                        : (role.id == 'auditor'
+                                            ? CupertinoIcons.eye_fill
+                                            : (role.isSystem ? CupertinoIcons.person_badge_plus : CupertinoIcons.slider_horizontal_3)),
+                                    size: 15,
+                                  ),
+                                  selectedColor: role.id.contains('super')
+                                      ? const Color(0xFF1E2A3A)
+                                      : (role.id == 'operator'
+                                          ? const Color(0xFF1E3A2B)
+                                          : const Color(0xFF2A2040)),
+                                  checkmarkColor: role.id.contains('super')
+                                      ? const Color(0xFF00E5FF)
+                                      : (role.id == 'operator'
+                                          ? const Color(0xFF30D158)
+                                          : const Color(0xFFBF5AF2)),
                                   onSelected: (val) {
                                     if (val) {
                                       updateDashboard(() {
-                                        selectedNewAdminRole = 'operator';
-                                        newAdminPermissions = AdminAccount.operatorPermissions();
+                                        selectedNewAdminRole = role.id;
+                                        newAdminPermissions = Map<String, Map<String, bool>>.from(
+                                          role.permissions.map((k, v) => MapEntry(k, Map<String, bool>.from(v))),
+                                        );
                                       });
                                     }
                                   },
-                                ),
-                                ChoiceChip(
-                                  selected: selectedNewAdminRole == 'super',
-                                  label: const Text('Super Admin (Confianza total)'),
-                                  avatar: const Icon(CupertinoIcons.shield_fill, size: 16),
-                                  selectedColor: const Color(0xFF1E2A3A),
-                                  checkmarkColor: const Color(0xFF00E5FF),
-                                  onSelected: (val) {
-                                    if (val) {
-                                      updateDashboard(() {
-                                        selectedNewAdminRole = 'super';
-                                        newAdminPermissions = AdminAccount.defaultPermissions();
-                                      });
-                                    }
-                                  },
-                                ),
-                                ChoiceChip(
-                                  selected: selectedNewAdminRole == 'custom',
-                                  label: const Text('Personalizado (CRUD)'),
-                                  avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 16),
-                                  onSelected: (val) {
-                                    if (val) {
-                                      updateDashboard(() {
-                                        selectedNewAdminRole = 'custom';
-                                      });
-                                    }
-                                  },
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            if (selectedNewAdminRole == 'operator')
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: const Color(0x1A30D158),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: const Color(0x3330D158)),
-                                ),
-                                child: const Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '✓ Solo verá el módulo de Gestión (podrá crear y buscar licencias).',
-                                      style: TextStyle(color: Color(0xFF30D158), fontSize: 12),
-                                    ),
-                                    SizedBox(height: 3),
-                                    Text(
-                                      '✗ NO verá el módulo Administradores (estará completamente oculto).',
-                                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                                    ),
-                                    SizedBox(height: 3),
-                                    Text(
-                                      '✗ NO podrá eliminar licencias ni eliminar clientes.',
-                                      style: TextStyle(color: Colors.white70, fontSize: 12),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            if (selectedNewAdminRole == 'super')
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: const Color(0x1A00E5FF),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: const Color(0x3300E5FF)),
-                                ),
-                                child: const Text(
-                                  '✓ Acceso total al sistema: Gestión completa (crear, buscar, editar, eliminar) y módulo Administradores.',
-                                  style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
-                                ),
-                              ),
-                            if (selectedNewAdminRole == 'custom') ...[
-                              const SizedBox(height: 6),
-                              _permissionsEditor(
-                                permissions: newAdminPermissions,
-                                onChanged: (module, action, value) {
-                                  updateDashboard(() {
-                                    newAdminPermissions[module]?[action] = value;
-                                  });
+                                );
+                              }),
+                              ChoiceChip(
+                                selected: selectedNewAdminRole == 'custom',
+                                label: const Text('Personalizado (CRUD)'),
+                                avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 15),
+                                onSelected: (val) {
+                                  if (val) {
+                                    updateDashboard(() {
+                                      selectedNewAdminRole = 'custom';
+                                    });
+                                  }
                                 },
                               ),
                             ],
-                          ],
-                        ),
-                      ),
-                    SizedBox(
-                      height: 50,
-                      width: narrow ? constraints.maxWidth : null,
-                      child: FilledButton.icon(
-                        onPressed: addAdmin,
-                        icon: const Icon(CupertinoIcons.add),
-                        label: const Text('Crear usuario'),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 18),
-      _dashboardPanel(
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Usuarios con acceso',
-              style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 12),
-            ...(() {
-              final activeList = widget.issuer.admins
-                  .where((admin) => admin.isActive)
-                  .toList();
-              if (activeList.isEmpty && widget.issuer.currentUser != null) {
-                activeList.add(
-                  AdminAccount(
-                    email: widget.issuer.currentUser!,
-                    passwordHash: '',
-                    role: 'super',
-                    isActive: true,
-                  ),
-                );
-              }
-              return activeList;
-            })().map((admin) {
-              final adminEmail = admin.email.trim().toLowerCase();
-              final currentEmail = (widget.issuer.currentUser ?? '').trim().toLowerCase();
-              final isCurrent = adminEmail == currentEmail;
-              final isCreatorAdmin = adminEmail == 'david.zapata@bdjstudio.com';
-              final isLoggedUserCreator = currentEmail == 'david.zapata@bdjstudio.com';
-
-              final leading = CircleAvatar(
-                backgroundColor: isCreatorAdmin ? const Color(0xFF00E5FF).withValues(alpha: 0.15) : null,
-                child: Icon(
-                  isCreatorAdmin ? CupertinoIcons.shield_fill : CupertinoIcons.person_fill,
-                  color: isCreatorAdmin ? const Color(0xFF00E5FF) : null,
-                ),
-              );
-              final title = Text(
-                admin.email,
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: isCreatorAdmin ? const Color(0xFF00E5FF) : null,
-                ),
-              );
-              final permSummary = !isCreatorAdmin && admin.role == 'custom' && admin.permissions != null
-                  ? _buildPermissionSummary(admin.permissions!)
-                  : null;
-              final subtitle = isCreatorAdmin
-                  ? const Text(
-                      'Creador & Super Admin Principal (Protegido)',
-                      style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (isCurrent)
-                          const Text(
-                            'Sesión actual',
-                            style: TextStyle(color: Colors.white70, fontSize: 12),
                           ),
-                        ?permSummary,
-                      ],
-                    );
-              final actions = <Widget>[
-                // El creador puede cambiar la contraseña de todos; cada usuario puede cambiar la suya propia
-                if (isCurrent || isLoggedUserCreator)
-                  TextButton.icon(
-                    onPressed: () => _showChangePasswordDialog(admin),
-                    icon: const Icon(CupertinoIcons.lock_shield, size: 16),
-                    label: Text(isCurrent ? 'Cambiar contraseña' : 'Restablecer contraseña'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: const Color(0xFF5E5CE6),
-                    ),
-                  ),
-                // Solo el creador puede editar permisos de otros admins (no del creador mismo)
-                if (isLoggedUserCreator && !isCreatorAdmin)
-                  TextButton.icon(
-                    onPressed: () => _showEditPermissionsDialog(admin),
-                    icon: const Icon(CupertinoIcons.checkmark_shield, size: 16),
-                    label: const Text('Permisos'),
-                    style: TextButton.styleFrom(
-                      foregroundColor: Colors.amberAccent,
-                    ),
-                  ),
-                // Solo se puede eliminar si NO es el creador ni la sesión actual, y si el usuario logueado es Creador o Super Admin
-                if (!isCreatorAdmin &&
-                    !isCurrent &&
-                    (isLoggedUserCreator || widget.issuer.canDo('admins', 'delete')))
-                  IconButton(
-                    tooltip: 'Eliminar Administrador',
-                    icon: const Icon(
-                      CupertinoIcons.trash,
-                      size: 18,
-                      color: Colors.redAccent,
-                    ),
-                    onPressed: () => _deleteAdmin(admin),
-                  ),
-              ];
-              return LayoutBuilder(
-                builder: (context, constraints) {
-                  if (constraints.maxWidth >= 560) {
-                    return ListTile(
-                      leading: leading,
-                      title: title,
-                      subtitle: subtitle,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _roleBadge(admin.role, admin.email),
-                          const SizedBox(width: 8),
-                          ...actions,
-                        ],
-                      ),
-                    );
-                  }
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            leading,
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
+                          const SizedBox(height: 8),
+                          if (selectedNewAdminRole == 'operator')
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0x1A30D158),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0x3330D158)),
+                              ),
+                              child: const Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  title,
-                                  subtitle,
+                                  Text(
+                                    '✓ Solo verá el módulo de Gestión (podrá crear y buscar licencias y clientes).',
+                                    style: TextStyle(color: Color(0xFF30D158), fontSize: 12),
+                                  ),
+                                  SizedBox(height: 3),
+                                  Text(
+                                    '✗ NO verá el módulo Usuarios (estará completamente oculto).',
+                                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                                  ),
+                                  SizedBox(height: 3),
+                                  Text(
+                                    '✗ NO podrá eliminar licencias ni eliminar clientes.',
+                                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                                  ),
                                 ],
                               ),
+                            )
+                          else if (selectedNewAdminRole == 'super' || selectedNewAdminRole == 'super_admin')
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0x1A00E5FF),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0x3300E5FF)),
+                              ),
+                              child: const Text(
+                                '✓ Acceso total al sistema: Gestión completa (crear, buscar, editar, eliminar) y módulo Usuarios.',
+                                style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
+                              ),
+                            )
+                          else if (selectedNewAdminRole == 'auditor')
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0x1ABF5AF2),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0x33BF5AF2)),
+                              ),
+                              child: const Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '✓ Solo lectura: Búsqueda y consulta de clientes y licencias en Gestión.',
+                                    style: TextStyle(color: Color(0xFFBF5AF2), fontSize: 12),
+                                  ),
+                                  SizedBox(height: 3),
+                                  Text(
+                                    '✗ Sin permisos de creación ni modificación.',
+                                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                                  ),
+                                  SizedBox(height: 3),
+                                  Text(
+                                    '✗ Módulo Usuarios completamente oculto.',
+                                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else if (selectedNewAdminRole == 'custom') ...[
+                            const SizedBox(height: 6),
+                            _permissionsEditor(
+                              permissions: newAdminPermissions,
+                              onChanged: (module, action, value) {
+                                updateDashboard(() {
+                                  newAdminPermissions[module]?[action] = value;
+                                });
+                              },
                             ),
-                            const SizedBox(width: 8),
-                            _roleBadge(admin.role, admin.email),
-                          ],
+                          ] else
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: const Color(0x1AFF9F0A),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: const Color(0x33FF9F0A)),
+                              ),
+                              child: Text(
+                                widget.issuer.findRole(selectedNewAdminRole).description,
+                                style: const TextStyle(color: Color(0xFFFF9F0A), fontSize: 12),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  SizedBox(
+                    height: 50,
+                    width: narrow ? constraints.maxWidth : null,
+                    child: FilledButton.icon(
+                      onPressed: addAdmin,
+                      icon: const Icon(CupertinoIcons.add),
+                      label: const Text('Crear usuario'),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUsersListPanel(bool isCreator) {
+    return _dashboardPanel(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Usuarios con acceso',
+            style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+          ...(() {
+            final activeList = widget.issuer.admins.where((admin) => admin.isActive).toList();
+            final me = widget.issuer.currentAdmin;
+            if (activeList.isEmpty && me != null) activeList.add(me);
+            return activeList;
+          })().map((admin) {
+            final adminEmail = admin.email.trim().toLowerCase();
+            final currentEmail = (widget.issuer.currentUser ?? '').trim().toLowerCase();
+            final isCurrent = adminEmail == currentEmail;
+            final isCreatorAdmin = admin.role == 'super_admin';
+            final isLoggedUserCreator = widget.issuer.isSuperAdmin;
+
+            final leading = CircleAvatar(
+              backgroundColor: isCreatorAdmin ? const Color(0xFF00E5FF).withValues(alpha: 0.15) : null,
+              child: Icon(
+                isCreatorAdmin ? CupertinoIcons.shield_fill : CupertinoIcons.person_fill,
+                color: isCreatorAdmin ? const Color(0xFF00E5FF) : null,
+              ),
+            );
+            final title = Text(
+              admin.email,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: isCreatorAdmin ? const Color(0xFF00E5FF) : null,
+              ),
+            );
+            final permSummary = !isCreatorAdmin && admin.role == 'custom' && admin.permissions != null
+                ? _buildPermissionSummary(admin.permissions!)
+                : null;
+            final subtitle = isCreatorAdmin
+                ? Text(
+                    isCurrent ? 'Super Administrador · Sesión actual' : 'Super Administrador (Protegido)',
+                    style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isCurrent)
+                        const Text(
+                          'Sesión actual',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
                         ),
-                        Wrap(children: actions),
+                      ?permSummary,
+                    ],
+                  );
+            final actions = <Widget>[
+              // Cada usuario cambia su propia contraseña (Supabase Auth). Los
+              // restablecimientos de terceros se hacen desde el panel de Supabase.
+              if (isCurrent)
+                TextButton.icon(
+                  onPressed: () => _showChangePasswordDialog(admin),
+                  icon: const Icon(CupertinoIcons.lock_shield, size: 16),
+                  label: const Text('Cambiar contraseña'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF5E5CE6),
+                  ),
+                ),
+              // Solo el creador puede editar permisos o reasignar roles de otros usuarios (no del creador mismo)
+              if (isLoggedUserCreator && !isCreatorAdmin)
+                TextButton.icon(
+                  onPressed: () => _showEditPermissionsDialog(admin),
+                  icon: const Icon(CupertinoIcons.checkmark_shield, size: 16),
+                  label: const Text('Rol y Permisos'),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.amberAccent,
+                  ),
+                ),
+              // Solo se puede eliminar si NO es el creador ni la sesión actual, y si el usuario logueado es Creador o tiene permiso de borrado en usuarios
+              if (!isCreatorAdmin &&
+                  !isCurrent &&
+                  (isLoggedUserCreator || widget.issuer.canDo('usuarios', 'delete')))
+                IconButton(
+                  tooltip: 'Eliminar Usuario',
+                  icon: const Icon(
+                    CupertinoIcons.trash,
+                    size: 18,
+                    color: Colors.redAccent,
+                  ),
+                  onPressed: () => _deleteAdmin(admin),
+                ),
+            ];
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                if (constraints.maxWidth >= 560) {
+                  return ListTile(
+                    leading: leading,
+                    title: title,
+                    subtitle: subtitle,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _roleBadge(admin.role, admin.email),
+                        const SizedBox(width: 8),
+                        ...actions,
                       ],
                     ),
                   );
-                },
-              );
-            }),
-          ],
-        ),
+                }
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          leading,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                title,
+                                subtitle,
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _roleBadge(admin.role, admin.email),
+                        ],
+                      ),
+                      Wrap(children: actions),
+                    ],
+                  ),
+                );
+              },
+            );
+          }),
+        ],
       ),
-    ],
-  );
+    );
+  }
+
+  Widget _buildRolesAndPermissionsPanel(bool isCreator) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _dashboardPanel(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(CupertinoIcons.shield_lefthalf_fill, color: Color(0xFF00E5FF)),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Roles y Permisos del Sistema (RBAC)',
+                          style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          'El control de acceso basado en roles define con precisión las operaciones CRUD autorizadas en cada módulo.',
+                          style: TextStyle(color: Colors.white60, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (isCreator)
+                    FilledButton.icon(
+                      onPressed: _showCreateCustomRoleDialog,
+                      icon: const Icon(CupertinoIcons.plus_circle_fill, size: 16),
+                      label: const Text('Nuevo Rol'),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 18),
+        ...widget.issuer.allRoles.map((role) {
+          final isSys = role.isSystem;
+          final roleColor = role.id.contains('super')
+              ? const Color(0xFF00E5FF)
+              : (role.id == 'operator'
+                  ? const Color(0xFF30D158)
+                  : (role.id == 'auditor' ? const Color(0xFFBF5AF2) : const Color(0xFFFF9F0A)));
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 14),
+            child: _dashboardPanel(
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 16,
+                        backgroundColor: roleColor.withValues(alpha: 0.18),
+                        child: Icon(
+                          role.id.contains('super')
+                              ? CupertinoIcons.shield_fill
+                              : (role.id == 'auditor'
+                                  ? CupertinoIcons.eye_fill
+                                  : (role.isSystem ? CupertinoIcons.person_badge_plus : CupertinoIcons.slider_horizontal_3)),
+                          size: 16,
+                          color: roleColor,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              role.name,
+                              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              role.description,
+                              style: const TextStyle(fontSize: 12, color: Colors.white70),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: isSys ? const Color(0x2200E5FF) : const Color(0x22FF9F0A),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isSys ? const Color(0x6600E5FF) : const Color(0x66FF9F0A),
+                          ),
+                        ),
+                        child: Text(
+                          role.id == 'super_admin' ? 'Sistema (Inmutable)' : (isSys ? 'Sistema' : 'Personalizado'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: isSys ? const Color(0xFF00E5FF) : const Color(0xFFFF9F0A),
+                          ),
+                        ),
+                      ),
+                      if (role.id != 'super_admin' && isCreator) ...[
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: 'Editar permisos del rol',
+                          icon: const Icon(CupertinoIcons.pencil, size: 16, color: Colors.amberAccent),
+                          onPressed: () => _showEditCustomRoleDialog(role),
+                        ),
+                        if (!isSys)
+                          IconButton(
+                            tooltip: 'Eliminar rol',
+                            icon: const Icon(CupertinoIcons.trash, size: 16, color: Colors.redAccent),
+                            onPressed: () => _deleteCustomRole(role),
+                          ),
+                      ],
+                    ],
+                  ),
+                  const Divider(height: 24, color: Color(0xFF232738)),
+                  const Text(
+                    'Matriz de Permisos Autorizados:',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white54),
+                  ),
+                  const SizedBox(height: 10),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isNarrow = constraints.maxWidth < 600;
+                      return Wrap(
+                        spacing: 20,
+                        runSpacing: 12,
+                        children: AppModule.all.map((mod) {
+                          final modPerms = role.permissions[mod.id] ??
+                              role.permissions[mod.id == 'usuarios' ? 'admins' : mod.id] ??
+                              {};
+                          return Container(
+                            width: isNarrow ? constraints.maxWidth : (constraints.maxWidth - 20) / 2,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF131722),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: const Color(0xFF1E2433)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(mod.icon, size: 14, color: const Color(0xFF00E5FF)),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      mod.name,
+                                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 6,
+                                  runSpacing: 4,
+                                  children: AppModule.availableActions.map((act) {
+                                    final allowed = modPerms[act] ?? false;
+                                    return Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: allowed ? const Color(0x2630D158) : const Color(0x15FFFFFF),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(
+                                          color: allowed ? const Color(0x6630D158) : const Color(0x22FFFFFF),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            allowed ? CupertinoIcons.check_mark : CupertinoIcons.xmark,
+                                            size: 11,
+                                            color: allowed ? const Color(0xFF30D158) : Colors.white38,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            AppModule.actionLabels[act] ?? act,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: allowed ? const Color(0xFF30D158) : Colors.white38,
+                                              fontWeight: allowed ? FontWeight.w600 : FontWeight.normal,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
 
   Future<void> _deleteAdmin(AdminAccount admin) async {
-    if (admin.email.trim().toLowerCase() == 'david.zapata@bdjstudio.com') {
+    if (admin.role == 'super_admin') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('La cuenta del Creador y Super Admin Principal no puede ser eliminada.'),
+          content: Text('Un Super Administrador no puede ser eliminado.'),
           backgroundColor: Colors.redAccent,
         ),
       );
@@ -2359,10 +2649,10 @@ extension _LicenseDashboardView on _LicenseHomeState {
                   );
                   return;
                 }
-                if (next.length < 6) {
+                if (next.length < 8) {
                   setDialogState(
                     () => errorText =
-                        'La contraseña debe tener al menos 6 caracteres.',
+                        'La contraseña debe tener al menos 8 caracteres.',
                   );
                   return;
                 }
@@ -2539,18 +2829,6 @@ extension _LicenseDashboardView on _LicenseHomeState {
     device.dispose();
   }
 
-  static const _moduleLabels = {
-    'gestion': 'Gestión (Licencias)',
-    'admins': 'Administradores',
-  };
-
-  static const _actionLabels = {
-    'create': 'Crear',
-    'read': 'Buscar',
-    'update': 'Actualizar',
-    'delete': 'Eliminar',
-  };
-
   Widget _permissionsEditor({
     required Map<String, Map<String, bool>> permissions,
     required void Function(String module, String action, bool value) onChanged,
@@ -2563,34 +2841,44 @@ extension _LicenseDashboardView on _LicenseHomeState {
           const Padding(
             padding: EdgeInsets.only(bottom: 8),
             child: Text(
-              'Permisos',
+              'Permisos por Módulo y Acción',
               style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Colors.amberAccent),
             ),
           ),
-        ...AdminAccount.availableModules.map((module) {
-          final modulePerms = permissions[module] ?? {};
+        ...AppModule.all.map((mod) {
+          final modulePerms = permissions[mod.id] ?? permissions[mod.id == 'usuarios' ? 'admins' : mod.id] ?? {};
           return Padding(
-            padding: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.only(bottom: 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _moduleLabels[module] ?? module,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                Row(
+                  children: [
+                    Icon(mod.icon, size: 14, color: const Color(0xFF00E5FF)),
+                    const SizedBox(width: 6),
+                    Text(
+                      mod.name,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 4),
                 Wrap(
-                  spacing: 4,
-                  runSpacing: 0,
-                  children: AdminAccount.availableActions.map((action) {
-                    final enabled = modulePerms[action] ?? true;
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: AppModule.availableActions.map((action) {
+                    final enabled = modulePerms[action] ?? false;
                     return FilterChip(
                       selected: enabled,
                       label: Text(
-                        _actionLabels[action] ?? action,
-                        style: const TextStyle(fontSize: 12),
+                        AppModule.actionLabels[action] ?? action,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: enabled ? Colors.cyanAccent : Colors.white60,
+                        ),
                       ),
-                      onSelected: (val) => onChanged(module, action, val),
-                      selectedColor: const Color(0xFF2A3050),
+                      onSelected: (val) => onChanged(mod.id, action, val),
+                      selectedColor: const Color(0xFF1E2A3A),
                       checkmarkColor: Colors.cyanAccent,
                       padding: const EdgeInsets.symmetric(horizontal: 4),
                       visualDensity: VisualDensity.compact,
@@ -2605,10 +2893,211 @@ extension _LicenseDashboardView on _LicenseHomeState {
     );
   }
 
+  void _showCreateCustomRoleDialog() {
+    final nameCtrl = TextEditingController();
+    final descCtrl = TextEditingController();
+    final perms = <String, Map<String, bool>>{
+      for (final mod in AppModule.all)
+        mod.id: {
+          for (final act in AppModule.availableActions) act: false,
+        },
+    };
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E2235),
+          title: const Text('Nuevo Rol Personalizado', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Nombre del Rol', hintText: 'Ej. Supervisor de Soporte'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descCtrl,
+                    decoration: const InputDecoration(labelText: 'Descripción', hintText: 'Breve explicación de las funciones'),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Permisos por Módulo y Acción:', style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  _permissionsEditor(
+                    permissions: perms,
+                    compact: true,
+                    onChanged: (mod, act, val) {
+                      setDialogState(() {
+                        perms[mod]?[act] = val;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                Navigator.of(ctx).pop();
+                final id = 'role_${DateTime.now().millisecondsSinceEpoch}';
+                final newRole = AppRole(
+                  id: id,
+                  name: name,
+                  description: descCtrl.text.trim(),
+                  permissions: perms,
+                  isSystem: false,
+                );
+                try {
+                  await widget.issuer.saveCustomRole(newRole);
+                } on Object catch (e) {
+                  updateDashboard(() => error = e.toString());
+                  return;
+                }
+                if (mounted) {
+                  updateDashboard(() {});
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Rol "$name" creado correctamente.'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Crear Rol'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showEditCustomRoleDialog(AppRole role) {
+    final nameCtrl = TextEditingController(text: role.name);
+    final descCtrl = TextEditingController(text: role.description);
+    final perms = Map<String, Map<String, bool>>.from(
+      role.permissions.map((k, v) => MapEntry(k, Map<String, bool>.from(v))),
+    );
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF1E2235),
+          title: Text('Editar Rol: ${role.name}', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Nombre del Rol'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: descCtrl,
+                    decoration: const InputDecoration(labelText: 'Descripción'),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Permisos por Módulo y Acción:', style: TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.w600, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  _permissionsEditor(
+                    permissions: perms,
+                    compact: true,
+                    onChanged: (mod, act, val) {
+                      setDialogState(() {
+                        perms[mod]?[act] = val;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar', style: TextStyle(color: Colors.white60)),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final name = nameCtrl.text.trim();
+                if (name.isEmpty) return;
+                Navigator.of(ctx).pop();
+                final updated = AppRole(
+                  id: role.id,
+                  name: name,
+                  description: descCtrl.text.trim(),
+                  permissions: perms,
+                  isSystem: role.isSystem,
+                );
+                try {
+                  await widget.issuer.saveCustomRole(updated);
+                } on Object catch (e) {
+                  updateDashboard(() => error = e.toString());
+                  return;
+                }
+                if (mounted) {
+                  updateDashboard(() {});
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Rol "$name" actualizado.'),
+                      behavior: SnackBarBehavior.floating,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteCustomRole(AppRole role) async {
+    final confirmed = await _confirmAction(
+      title: 'Eliminar Rol',
+      message: '¿Estás seguro de eliminar el rol "${role.name}"? Los usuarios que tengan asignado este rol deberán reasignarse.',
+      confirmLabel: 'Eliminar',
+    );
+    if (!confirmed) return;
+    try {
+      await widget.issuer.deleteCustomRole(role.id);
+    } on Object catch (e) {
+      updateDashboard(() => error = e.toString());
+      return;
+    }
+    if (mounted) {
+      updateDashboard(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Rol "${role.name}" eliminado.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   void _showEditPermissionsDialog(AdminAccount admin) {
     String currentEditRole = admin.role;
+    final initialRole = widget.issuer.findRole(currentEditRole);
     final editPerms = Map<String, Map<String, bool>>.from(
-      (admin.permissions ?? (admin.role == 'operator' ? AdminAccount.operatorPermissions() : AdminAccount.defaultPermissions())).map(
+      (admin.permissions ?? initialRole.permissions).map(
         (k, v) => MapEntry(k, Map<String, bool>.from(v)),
       ),
     );
@@ -2620,17 +3109,17 @@ extension _LicenseDashboardView on _LicenseHomeState {
           backgroundColor: const Color(0xFF1E2235),
           title: Text(
             'Rol y Permisos de ${admin.email}',
-            style: const TextStyle(color: Colors.white, fontSize: 16),
+            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
           ),
           content: SizedBox(
-            width: 460,
+            width: 480,
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Rol / Nivel de Acceso',
+                    'Asignar Rol (RBAC):',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.amberAccent),
                   ),
                   const SizedBox(height: 8),
@@ -2638,44 +3127,47 @@ extension _LicenseDashboardView on _LicenseHomeState {
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      ChoiceChip(
-                        selected: currentEditRole == 'operator',
-                        label: const Text('Operador de Gestión'),
-                        avatar: const Icon(CupertinoIcons.person_badge_plus, size: 15),
-                        selectedColor: const Color(0xFF1E3A2B),
-                        checkmarkColor: const Color(0xFF30D158),
-                        onSelected: (val) {
-                          if (val) {
-                            setDialogState(() {
-                              currentEditRole = 'operator';
-                              editPerms
-                                ..clear()
-                                ..addAll(AdminAccount.operatorPermissions());
-                            });
-                          }
-                        },
-                      ),
-                      ChoiceChip(
-                        selected: currentEditRole == 'super',
-                        label: const Text('Super Admin'),
-                        avatar: const Icon(CupertinoIcons.shield_fill, size: 15),
-                        selectedColor: const Color(0xFF1E2A3A),
-                        checkmarkColor: const Color(0xFF00E5FF),
-                        onSelected: (val) {
-                          if (val) {
-                            setDialogState(() {
-                              currentEditRole = 'super';
-                              editPerms
-                                ..clear()
-                                ..addAll(AdminAccount.defaultPermissions());
-                            });
-                          }
-                        },
-                      ),
+                      ...widget.issuer.allRoles.map((role) {
+                        final isSelected = currentEditRole == role.id ||
+                            (currentEditRole == 'super' && role.id == 'super_admin') ||
+                            (currentEditRole == 'super_admin' && role.id == 'super_admin');
+                        return ChoiceChip(
+                          selected: isSelected,
+                          label: Text(role.name),
+                          avatar: Icon(
+                            role.id.contains('super')
+                                ? CupertinoIcons.shield_fill
+                                : (role.id == 'auditor'
+                                    ? CupertinoIcons.eye_fill
+                                    : (role.isSystem ? CupertinoIcons.person_badge_plus : CupertinoIcons.slider_horizontal_3)),
+                            size: 14,
+                          ),
+                          selectedColor: role.id.contains('super')
+                              ? const Color(0xFF1E2A3A)
+                              : (role.id == 'operator'
+                                  ? const Color(0xFF1E3A2B)
+                                  : const Color(0xFF2A2040)),
+                          checkmarkColor: role.id.contains('super')
+                              ? const Color(0xFF00E5FF)
+                              : (role.id == 'operator'
+                                  ? const Color(0xFF30D158)
+                                  : const Color(0xFFBF5AF2)),
+                          onSelected: (val) {
+                            if (val) {
+                              setDialogState(() {
+                                currentEditRole = role.id;
+                                editPerms
+                                  ..clear()
+                                  ..addAll(role.permissions);
+                              });
+                            }
+                          },
+                        );
+                      }),
                       ChoiceChip(
                         selected: currentEditRole == 'custom',
-                        label: const Text('Personalizado'),
-                        avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 15),
+                        label: const Text('Personalizado (CRUD)'),
+                        avatar: const Icon(CupertinoIcons.slider_horizontal_3, size: 14),
                         onSelected: (val) {
                           if (val) {
                             setDialogState(() {
@@ -2700,13 +3192,13 @@ extension _LicenseDashboardView on _LicenseHomeState {
                         children: [
                           Text('✓ Solo módulo de Gestión (crear y buscar licencias).', style: TextStyle(color: Color(0xFF30D158), fontSize: 12)),
                           SizedBox(height: 2),
-                          Text('✗ Módulo Administradores totalmente oculto.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                          Text('✗ Módulo Usuarios totalmente oculto.', style: TextStyle(color: Colors.white70, fontSize: 12)),
                           SizedBox(height: 2),
                           Text('✗ No puede eliminar clientes ni licencias.', style: TextStyle(color: Colors.white70, fontSize: 12)),
                         ],
                       ),
-                    ),
-                  if (currentEditRole == 'super')
+                    )
+                  else if (currentEditRole == 'super' || currentEditRole == 'super_admin')
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
@@ -2715,11 +3207,30 @@ extension _LicenseDashboardView on _LicenseHomeState {
                         border: Border.all(color: const Color(0x3300E5FF)),
                       ),
                       child: const Text(
-                        '✓ Acceso total al sistema: Gestión completa y Administradores.',
+                        '✓ Acceso total al sistema: Gestión completa y Usuarios.',
                         style: TextStyle(color: Color(0xFF00E5FF), fontSize: 12),
                       ),
-                    ),
-                  if (currentEditRole == 'custom')
+                    )
+                  else if (currentEditRole == 'auditor')
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0x1ABF5AF2),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0x33BF5AF2)),
+                      ),
+                      child: const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('✓ Solo lectura: Búsqueda y consulta en Gestión.', style: TextStyle(color: Color(0xFFBF5AF2), fontSize: 12)),
+                          SizedBox(height: 2),
+                          Text('✗ Sin permisos de creación ni modificación.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                          SizedBox(height: 2),
+                          Text('✗ Módulo Usuarios totalmente oculto.', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                        ],
+                      ),
+                    )
+                  else if (currentEditRole == 'custom')
                     _permissionsEditor(
                       permissions: editPerms,
                       compact: true,
@@ -2728,6 +3239,19 @@ extension _LicenseDashboardView on _LicenseHomeState {
                           editPerms[module]?[action] = value;
                         });
                       },
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0x1AFF9F0A),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0x33FF9F0A)),
+                      ),
+                      child: Text(
+                        widget.issuer.findRole(currentEditRole).description,
+                        style: const TextStyle(color: Color(0xFFFF9F0A), fontSize: 12),
+                      ),
                     ),
                 ],
               ),
@@ -2742,19 +3266,20 @@ extension _LicenseDashboardView on _LicenseHomeState {
               onPressed: () async {
                 Navigator.of(ctx).pop();
                 try {
+                  final finalPerms = currentEditRole == 'custom'
+                      ? editPerms
+                      : widget.issuer.findRole(currentEditRole).permissions;
                   await widget.issuer.updateAdmin(
                     admin.id ?? admin.email,
                     email: admin.email,
                     role: currentEditRole,
-                    permissions: currentEditRole == 'custom'
-                        ? editPerms
-                        : (currentEditRole == 'super' ? AdminAccount.defaultPermissions() : AdminAccount.operatorPermissions()),
+                    permissions: finalPerms,
                   );
                   if (mounted) {
                     updateDashboard(() {});
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text('Rol y permisos de ${admin.email} actualizados.'),
+                        content: Text('Rol de ${admin.email} actualizado.'),
                         behavior: SnackBarBehavior.floating,
                       ),
                     );
@@ -2775,12 +3300,12 @@ extension _LicenseDashboardView on _LicenseHomeState {
 
   Widget? _buildPermissionSummary(Map<String, Map<String, bool>> perms) {
     final denied = <String>[];
-    for (final module in AdminAccount.availableModules) {
-      final mp = perms[module];
+    for (final module in AppModule.all) {
+      final mp = perms[module.id] ?? perms[module.id == 'usuarios' ? 'admins' : module.id];
       if (mp == null) continue;
-      for (final action in AdminAccount.availableActions) {
+      for (final action in AppModule.availableActions) {
         if (mp[action] != true) {
-          denied.add('${_moduleLabels[module] ?? module}: ${_actionLabels[action] ?? action}');
+          denied.add('${module.name}: ${AppModule.actionLabels[action] ?? action}');
         }
       }
     }
@@ -2794,31 +3319,36 @@ extension _LicenseDashboardView on _LicenseHomeState {
   }
 
   Widget _roleBadge([String? role, String? email]) {
-    final cleanEmail = (email ?? '').trim().toLowerCase();
-    final isCreator = cleanEmail == 'david.zapata@bdjstudio.com';
-    final isSuper = role == 'super';
+    final isSuper = role == 'super' || role == 'super_admin';
+    final isLicenseAdmin = role == 'license_admin';
     final isOperator = role == 'operator';
+    final isAuditor = role == 'auditor';
 
     Color bg;
     Color fg;
     String label;
 
-    if (isCreator) {
+    if (isSuper) {
       bg = const Color(0x3300E5FF);
       fg = const Color(0xFF00E5FF);
-      label = 'Creador';
-    } else if (isSuper) {
-      bg = const Color(0x3300E5FF);
-      fg = const Color(0xFF00E5FF);
-      label = 'Super Admin';
+      label = 'Super Administrador';
+    } else if (isLicenseAdmin) {
+      bg = const Color(0x335E5CE6);
+      fg = const Color(0xFF8E8CFF);
+      label = 'Admin. de Licencias';
     } else if (isOperator) {
       bg = const Color(0x3330D158);
       fg = const Color(0xFF30D158);
-      label = 'Operador (Gestión)';
+      label = 'Operador de Licencias';
+    } else if (isAuditor) {
+      bg = const Color(0x33BF5AF2);
+      fg = const Color(0xFFBF5AF2);
+      label = 'Auditor';
     } else {
+      final customRole = widget.issuer.findRole(role ?? '');
       bg = const Color(0x33FF9F0A);
       fg = const Color(0xFFFF9F0A);
-      label = 'Personalizado';
+      label = customRole.isSystem ? 'Personalizado' : customRole.name;
     }
 
     return Container(
